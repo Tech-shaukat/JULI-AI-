@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1012061203559",
+    "project_id": "juli-ai-88da7",
+    "storage_bucket": "juli-ai-88da7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1012061203559:android:a9cf1506f691ad1fadf8c2",
+        "android_client_info": {
+          "package_name": "com.juli.assistant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBw97UfzTuVDVRbyEvdpAxfvMLsdfa26tA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
