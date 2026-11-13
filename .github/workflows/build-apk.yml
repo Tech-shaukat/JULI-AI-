@@ -19,7 +19,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Prepare debug keystore
+      - name: Prepare keystores for release & debug signing
         run: |
           if [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
@@ -29,14 +29,34 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+          if [ ! -f my-upload-key.jks ]; then
+            keytool -genkeypair -v -keystore my-upload-key.jks \
+              -storepass android -alias upload -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=JULI AI,O=Safalta,C=IN"
+          fi
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
+      - name: Build Release APK (reCAPTCHA App Check enabled)
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: android
+          KEY_PASSWORD: android
+        run: gradle :app:assembleRelease --no-daemon
+
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon
+
+      - name: Upload JULI AI Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JULI-AI-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
 
       - name: Upload JULI AI Debug APK
         uses: actions/upload-artifact@v4

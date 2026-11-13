@@ -2,6 +2,7 @@ package com.example.ai
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.example.BuildConfig
 import com.google.firebase.FirebaseApp
@@ -22,49 +23,71 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             FirebaseApp.initializeApp(context)
         }
 
+        val siteKey = resolveRecaptchaSiteKey(context)
+
         if (BuildConfig.DEBUG) {
             val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
+            val persistenceKey = FirebaseApp.getInstance().persistenceKey
+            val prefs = context.getSharedPreferences(
+                "$DEBUG_STORE_PREFIX$persistenceKey",
+                Context.MODE_PRIVATE
+            )
 
             if (!debugToken.isNullOrEmpty()) {
-                val persistenceKey = FirebaseApp.getInstance().persistenceKey
-                val prefs = context.getSharedPreferences(
-                    "$DEBUG_STORE_PREFIX$persistenceKey",
-                    Context.MODE_PRIVATE
-                )
                 // Must use synchronous commit() before installing DebugAppCheckProviderFactory
                 prefs.edit()
                     .putString(DEBUG_SECRET_KEY, debugToken)
                     .commit()
                 Log.d(TAG, "App Check debug secret configured successfully.")
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
+                Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            } else if (prefs.contains(DEBUG_SECRET_KEY) || isRunningOnEmulator() || siteKey.isNullOrBlank()) {
+                Log.w(TAG, "Using DebugAppCheckProviderFactory (cached secret or emulator).")
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
             } else {
-                Log.w(TAG, "No debug token found in Intent extra.")
+                // Sideloaded debug APK on a physical phone without injected debug token:
+                // Use provisioned reCAPTCHA Enterprise site key so App Check attestation succeeds on real devices.
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                )
+                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed for physical device.")
             }
-
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
         } else {
-            val resId = context.resources.getIdentifier(
-                RECAPTCHA_SITE_KEY_RES,
-                "string",
-                context.packageName
-            )
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
-                } else {
-                    Log.e(TAG, "recaptcha_site_key resource string is blank.")
-                }
+            if (!siteKey.isNullOrBlank()) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                )
+                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
             } else {
-                Log.e(TAG, "recaptcha_site_key string resource not found in package.")
+                Log.e(TAG, "recaptcha_site_key string resource missing or blank.")
             }
         }
     } catch (e: Exception) {
         Log.e(TAG, "Failed to initialize Firebase App Check", e)
     }
+}
+
+private fun resolveRecaptchaSiteKey(context: Context): String? {
+    val resId = context.resources.getIdentifier(
+        RECAPTCHA_SITE_KEY_RES,
+        "string",
+        context.packageName
+    )
+    if (resId == 0) return null
+    return context.getString(resId).takeIf { it.isNotBlank() }
+}
+
+private fun isRunningOnEmulator(): Boolean {
+    return Build.FINGERPRINT.startsWith("generic", ignoreCase = true) ||
+        Build.FINGERPRINT.startsWith("unknown", ignoreCase = true) ||
+        Build.MODEL.contains("google_sdk", ignoreCase = true) ||
+        Build.MODEL.contains("Emulator", ignoreCase = true) ||
+        Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
+        Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
+        (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic")) ||
+        Build.PRODUCT.contains("sdk", ignoreCase = true)
 }

@@ -28,10 +28,13 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -76,11 +79,13 @@ fun AssistantScreen(
     statusText: String,
     liveTranscription: String,
     lastActionBadge: String?,
+    bannerError: String?,
     language: String,
     isWakeWordActive: Boolean,
     onToggleLive: () -> Unit,
     onQuickVoiceClick: () -> Unit,
     onStopSpeaking: () -> Unit,
+    onDismissError: () -> Unit,
     onLanguageChange: (String) -> Unit,
     onToggleWakeWord: () -> Unit,
     onQuickAction: (String) -> Unit,
@@ -185,6 +190,54 @@ fun AssistantScreen(
                                 fontWeight = FontWeight.Normal,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = !bannerError.isNullOrBlank(),
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + slideOutVertically()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = StateError.copy(alpha = 0.14f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, StateError.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .fillMaxWidth(0.94f)
+                        .padding(top = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = "Error",
+                            tint = StateError,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = bannerError.orEmpty(),
+                            color = TextPrimary,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = onDismissError,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss Error",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }

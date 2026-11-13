@@ -151,8 +151,10 @@ fun JuliMainApp(viewModel: JuliViewModel) {
     val isWakeWordActive by viewModel.isWakeWordActive.collectAsState()
     val liveUiState by viewModel.liveUiState.collectAsState()
     val lastActionBadge by viewModel.lastActionBadge.collectAsState()
+    val bannerError by viewModel.bannerError.collectAsState()
 
     var showMicRationale by remember { mutableStateOf(false) }
+    var pendingMicPurpose by remember { mutableStateOf<String?>(null) }
 
     // BackHandler: Return to Assistant tab when user presses system Back
     BackHandler(enabled = currentTab != NavigationTab.ASSISTANT) {
@@ -186,7 +188,8 @@ fun JuliMainApp(viewModel: JuliViewModel) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasNotificationPermission = isGranted
-        if (hasMicPermission) {
+        if (hasMicPermission && pendingMicPurpose == "wake") {
+            pendingMicPurpose = null
             viewModel.toggleWakeWordService(context, true) {}
         }
     }
@@ -195,13 +198,28 @@ fun JuliMainApp(viewModel: JuliViewModel) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasMicPermission = isGranted
+        val purpose = pendingMicPurpose
         if (isGranted) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                viewModel.toggleGeminiLive(true) {}
+            when (purpose) {
+                "quick" -> {
+                    pendingMicPurpose = null
+                    viewModel.onQuickVoiceClicked(true) {}
+                }
+                "wake" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        pendingMicPurpose = null
+                        viewModel.toggleWakeWordService(context, true) {}
+                    }
+                }
+                else -> {
+                    pendingMicPurpose = null
+                    viewModel.toggleGeminiLive(true) {}
+                }
             }
         } else {
+            pendingMicPurpose = null
             showMicRationale = true
         }
     }
@@ -481,12 +499,14 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         statusText = statusText,
                         liveTranscription = liveTranscription,
                         lastActionBadge = lastActionBadge,
+                        bannerError = bannerError,
                         language = language,
                         isWakeWordActive = isWakeWordActive,
                         onToggleLive = {
                             viewModel.toggleGeminiLive(
                                 hasRecordPermission = hasMicPermission,
                                 onRequestPermission = {
+                                    pendingMicPurpose = "live"
                                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             )
@@ -495,16 +515,20 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                             viewModel.onQuickVoiceClicked(
                                 hasRecordPermission = hasMicPermission,
                                 onRequestPermission = {
+                                    pendingMicPurpose = "quick"
                                     micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             )
                         },
                         onStopSpeaking = { viewModel.stopSpeaking() },
+                        onDismissError = { viewModel.dismissBannerError() },
                         onLanguageChange = { viewModel.setLanguage(it) },
                         onToggleWakeWord = {
                             if (!hasMicPermission) {
+                                pendingMicPurpose = "wake"
                                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                                pendingMicPurpose = "wake"
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 viewModel.toggleWakeWordService(context, true) {}
@@ -541,8 +565,10 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         isWakeWordActive = isWakeWordActive,
                         onToggleWakeWord = {
                             if (!hasMicPermission) {
+                                pendingMicPurpose = "wake"
                                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                                pendingMicPurpose = "wake"
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 viewModel.toggleWakeWordService(context, true) {}
@@ -571,8 +597,10 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         onSpeechParamsChange = { rate, p -> viewModel.setSpeechParams(rate, p) },
                         onToggleWakeWord = {
                             if (!hasMicPermission) {
+                                pendingMicPurpose = "wake"
                                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                                pendingMicPurpose = "wake"
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 viewModel.toggleWakeWordService(context, true) {}

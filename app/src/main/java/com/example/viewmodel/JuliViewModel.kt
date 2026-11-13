@@ -17,6 +17,8 @@ import com.example.data.model.TaskItem
 import com.example.data.model.UserMemory
 import com.example.data.repository.JuliRepository
 import android.content.Intent
+import com.example.brain.BrainAction
+import com.example.brain.JuliBrain
 import com.example.intents.MobileActionDispatcher
 import com.example.intents.PendingAction
 import com.example.service.WakeWordEvent
@@ -109,11 +111,16 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _bannerError = MutableStateFlow<String?>(null)
+    val bannerError: StateFlow<String?> = _bannerError.asStateFlow()
+
     private val _pendingAction = MutableStateFlow<PendingAction?>(null)
     val pendingAction: StateFlow<PendingAction?> = _pendingAction.asStateFlow()
 
     private val _lastActionBadge = MutableStateFlow<String?>(null)
     val lastActionBadge: StateFlow<String?> = _lastActionBadge.asStateFlow()
+
+    private val localBrain = JuliBrain()
 
     private lateinit var liveManager: JuliLiveManager
 
@@ -195,7 +202,9 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     LivePhase.ERROR -> {
                         _assistantState.value = OrbState.ERROR
-                        _statusText.value = live.errorMessage ?: "Gemini Live त्रुटि"
+                        val errMsg = live.errorMessage ?: "Gemini Live त्रुटि"
+                        _statusText.value = errMsg
+                        _bannerError.value = errMsg
                         if (!live.errorMessage.isNullOrBlank()) {
                             _errorMessage.value = live.errorMessage
                         }
@@ -364,6 +373,8 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                 speechManager?.stopListening()
                 _liveTranscription.value = ""
                 _lastActionBadge.value = null
+                _bannerError.value = null
+                liveManager.clearError()
 
                 if (isWakeWordActive.value) {
                     WakeWordService.pause(getApplication())
@@ -444,7 +455,15 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() {
         _errorMessage.value = null
+    }
+
+    fun dismissBannerError() {
+        _bannerError.value = null
         liveManager.clearError()
+        if (_assistantState.value == OrbState.ERROR) {
+            _assistantState.value = OrbState.IDLE
+            _statusText.value = "Gemini Live Ready • टैप करें"
+        }
     }
 
     fun setPendingAction(action: PendingAction?) {
@@ -560,6 +579,7 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
             val historySnapshot = chatMessages.value
             repository.addMessage(text = trimmed, isUser = true, language = _language.value)
 
+            _bannerError.value = null
             _assistantState.value = OrbState.THINKING
             _statusText.value = "Gemini AI सोच रही है..."
 
@@ -581,20 +601,122 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                 speakText(reply.text, reply.isHindi)
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Gemini query timed out", e)
-                val msg = "Gemini AI उत्तर देने में समय अधिक ले रहा है (Timeout)। कृपया फिर से प्रयास करें।"
-                _assistantState.value = OrbState.ERROR
-                _statusText.value = "Request Timed Out"
-                _errorMessage.value = msg
+                val msg = "Gemini AI उत्तर देने में समय अधिक ले रहा है (Timeout)। कृपया इंटरनेट जाँचें।"
+                if (!tryLocalDeviceActionFallback(trimmed)) {
+                    reportVisibleError(msg, "Timeout")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Gemini query failed", e)
                 val errDetail = e.localizedMessage ?: "Gemini AI connection failed."
-                _assistantState.value = OrbState.ERROR
-                _statusText.value = "Gemini AI Error"
-                _errorMessage.value = errDetail
+                if (!tryLocalDeviceActionFallback(trimmed)) {
+                    reportVisibleError("Gemini AI त्रुटि: $errDetail", "Error")
+                }
             }
         }
+    }
+
+    private suspend fun reportVisibleError(message: String, badge: String) {
+        _assistantState.value = OrbState.ERROR
+        _statusText.value = message
+        _bannerError.value = message
+        _errorMessage.value = message
+        repository.addMessage(
+            text = message,
+            isUser = false,
+            actionBadge = badge,
+            language = "hi"
+        )
+    }
+
+    private suspend fun tryLocalDeviceActionFallback(query: String): Boolean {
+        val context: Context = getApplication()
+        return when (val action = localBrain.processQuery(query, _language.value)) {
+            is BrainAction.OpenYouTube -> {
+                MobileActionDispatcher.openYouTube(context, action.query)
+                finishLocalFallback(action.speakResponse, action.isHindi, "YouTube")
+                true
+            }
+            is BrainAction.OpenChrome -> {
+                MobileActionDispatcher.openChrome(context, action.queryOrUrl)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Browser")
+                true
+            }
+            is BrainAction.OpenCamera -> {
+                MobileActionDispatcher.openCamera(context)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Camera")
+                true
+            }
+            is BrainAction.OpenSettings -> {
+                MobileActionDispatcher.openSettings(context, action.settingType)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Settings")
+                true
+            }
+            is BrainAction.CallPhone -> {
+                _pendingAction.value = PendingAction.MakeCall(action.recipientName, action.phoneNumber)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Confirm Call")
+                true
+            }
+            is BrainAction.SendSms -> {
+                _pendingAction.value = PendingAction.SendSms(action.recipientName, action.phoneNumber, action.message)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Confirm SMS")
+                true
+            }
+            is BrainAction.SendWhatsApp -> {
+                _pendingAction.value = PendingAction.SendWhatsApp(action.recipientName, action.phoneNumber, action.message)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Confirm WhatsApp")
+                true
+            }
+            is BrainAction.CreateNote -> {
+                repository.saveNote(action.title, action.content)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Note Saved")
+                true
+            }
+            is BrainAction.CreateTask -> {
+                repository.saveTask(action.title, action.priority)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Task Added")
+                true
+            }
+            is BrainAction.SaveMemory -> {
+                repository.saveMemory(action.key, action.value)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Memory Saved")
+                true
+            }
+            is BrainAction.ShowSection -> {
+                _currentTab.value = when (action.section) {
+                    "notes", "tasks" -> NavigationTab.PRODUCTIVITY
+                    "actions" -> NavigationTab.ACTIONS
+                    "settings" -> NavigationTab.SETTINGS
+                    else -> NavigationTab.ASSISTANT
+                }
+                finishLocalFallback(action.speakResponse, action.isHindi, "Navigation")
+                true
+            }
+            is BrainAction.Speak -> {
+                if (action.actionBadge in listOf("Time", "Date", "Calculator", "Identity")) {
+                    finishLocalFallback(action.text, action.isHindi, action.actionBadge ?: "Local")
+                    true
+                } else {
+                    false
+                }
+            }
+            is BrainAction.StopSpeaking -> {
+                stopSpeaking()
+                true
+            }
+        }
+    }
+
+    private suspend fun finishLocalFallback(text: String, isHindi: Boolean, badge: String) {
+        _lastActionBadge.value = badge
+        repository.addMessage(
+            text = text,
+            isUser = false,
+            actionBadge = badge,
+            language = if (isHindi) "hi" else "en"
+        )
+        speakText(text, isHindi)
     }
 
     fun speakText(text: String, isHindi: Boolean) {
