@@ -62,16 +62,31 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Configure API keys from GitHub Secrets (if provided)
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          VIDEO_STUDIO_API_KEY: ${{ secrets.VIDEO_STUDIO_API_KEY }}
+        run: |
+          if [ -n "$MAPS_API_KEY" ] || [ -n "$VIDEO_STUDIO_API_KEY" ]; then
+            : > .env
+            [ -n "$MAPS_API_KEY" ] && printf 'MAPS_API_KEY=%s\n' "$MAPS_API_KEY" >> .env
+            [ -n "$VIDEO_STUDIO_API_KEY" ] && printf 'VIDEO_STUDIO_API_KEY=%s\n' "$VIDEO_STUDIO_API_KEY" >> .env
+            echo "Configured .env from GitHub Secrets."
+          fi
+
       - name: Build Release APK (reCAPTCHA App Check enabled)
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: android
           KEY_PASSWORD: android
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
           gradle --version
           gradle :app:assembleRelease --no-daemon --stacktrace
 
       - name: Build Debug APK
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Upload JULI AI Release APK

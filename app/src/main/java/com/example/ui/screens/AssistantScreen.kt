@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -372,6 +374,8 @@ private fun StateBadge(state: OrbState, statusText: String) {
 @Composable
 private fun QuickShortcutsRow(onSelect: (String) -> Unit) {
     val items = listOf(
+        ShortcutItem("Patna Junction का मैप सेट करो", Icons.Default.Map, CyberCyan),
+        ShortcutItem("मेरे मैसेज और नोटिफिकेशन पढ़ो", Icons.Default.NotificationsActive, NeonPurple),
         ShortcutItem("YouTube पर गाना चलाओ", Icons.Default.SmartDisplay, Color(0xFFFF0033)),
         ShortcutItem("WhatsApp मैसेज भेजो: नमस्ते!", Icons.AutoMirrored.Filled.Chat, Color(0xFF25D366)),
         ShortcutItem("कॉल लगाओ", Icons.Default.Call, StateSuccess),

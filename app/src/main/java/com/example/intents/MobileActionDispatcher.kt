@@ -51,6 +51,13 @@ object MobileActionDispatcher {
         }
     }
 
+    fun buildDirectCallIntent(phoneNumber: String): Intent {
+        val clean = sanitizePhoneNumber(phoneNumber)
+        return Intent(Intent.ACTION_CALL, Uri.parse("tel:$clean")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
     fun buildSmsIntent(phoneNumber: String, message: String): Intent {
         val clean = sanitizePhoneNumber(phoneNumber)
         val uri = Uri.parse("smsto:$clean")
@@ -71,6 +78,100 @@ object MobileActionDispatcher {
         } catch (e: Exception) {
             Log.e(TAG, "Error opening phone dialer", e)
             false
+        }
+    }
+
+    /**
+     * Places a direct phone call when CALL_PHONE permission is granted; safely falls back to Dialer otherwise.
+     */
+    fun placeDirectCall(context: Context, phoneNumber: String): Boolean {
+        val clean = sanitizePhoneNumber(phoneNumber)
+        if (clean.isEmpty()) return openDialer(context, "")
+
+        if (!ContactResolver.hasCallPhonePermission(context)) {
+            return openDialer(context, clean)
+        }
+        return try {
+            context.startActivity(buildDirectCallIntent(clean))
+            true
+        } catch (e: SecurityException) {
+            Log.w(TAG, "CALL_PHONE permission missing at runtime, falling back to Dialer", e)
+            openDialer(context, clean)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error placing direct call", e)
+            openDialer(context, clean)
+        }
+    }
+
+    fun openMapsNavigation(context: Context, destination: String, travelMode: String = "driving"): Boolean {
+        val trimmed = destination.trim()
+        if (trimmed.isEmpty()) return false
+        val encoded = URLEncoder.encode(trimmed, "UTF-8")
+        val modeChar = when (travelMode.lowercase()) {
+            "walking", "w" -> "w"
+            "bicycling", "b" -> "b"
+            "two_wheeler", "bike", "l" -> "l"
+            else -> "d"
+        }
+
+        return try {
+            val navUri = Uri.parse("google.navigation:q=$encoded&mode=$modeChar")
+            val mapsNavIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
+                setPackage("com.google.android.apps.maps")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (mapsNavIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(mapsNavIntent)
+                return true
+            }
+
+            val geoUri = Uri.parse("geo:0,0?q=$encoded")
+            val geoIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (geoIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(geoIntent)
+                return true
+            }
+
+            openWebUrl(context, "https://www.google.com/maps/dir/?api=1&destination=$encoded")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting Google Maps navigation", e)
+            openWebUrl(context, "https://www.google.com/maps/dir/?api=1&destination=$encoded")
+        }
+    }
+
+    fun searchMapsPlace(context: Context, query: String): Boolean {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return false
+        val encoded = URLEncoder.encode(trimmed, "UTF-8")
+        return try {
+            val geoUri = Uri.parse("geo:0,0?q=$encoded")
+            val mapsIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
+                setPackage("com.google.android.apps.maps")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (mapsIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(mapsIntent)
+                return true
+            }
+            openWebUrl(context, "https://www.google.com/maps/search/?api=1&query=$encoded")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error searching Google Maps", e)
+            openWebUrl(context, "https://www.google.com/maps/search/?api=1&query=$encoded")
+        }
+    }
+
+    fun openNotificationListenerSettings(context: Context): Boolean {
+        return try {
+            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening Notification Listener settings", e)
+            openSettings(context, "general")
         }
     }
 

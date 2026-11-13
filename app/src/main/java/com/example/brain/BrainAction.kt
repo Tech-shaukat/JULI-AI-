@@ -80,5 +80,17 @@ sealed class BrainAction {
         val isHindi: Boolean = true
     ) : BrainAction()
 
+    data class NavigateMap(
+        val destination: String,
+        val travelMode: String = "driving",
+        val speakResponse: String,
+        val isHindi: Boolean = true
+    ) : BrainAction()
+
+    data class ReadNotifications(
+        val appFilter: String? = null,
+        val isHindi: Boolean = true
+    ) : BrainAction()
+
     object StopSpeaking : BrainAction()
 }

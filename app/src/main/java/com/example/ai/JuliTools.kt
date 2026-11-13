@@ -5,8 +5,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.example.data.repository.JuliRepository
+import com.example.intents.ContactResolver
+import com.example.intents.JuliAssistantPrefs
 import com.example.intents.MobileActionDispatcher
 import com.example.intents.PendingAction
+import com.example.service.NotificationCenterStore
 import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.FunctionCallPart
 import com.google.firebase.ai.type.FunctionDeclaration
@@ -51,12 +54,15 @@ object JuliTools {
 
                 Core behavior:
                 - Speak naturally, concisely, and warmly—ideal for real-time voice conversation. Avoid markdown formatting, bullet lists, or long essays unless asked.
-                - Whenever the user asks to perform an action on the phone (open YouTube, search Google/Chrome, open Camera, open WiFi/Bluetooth/Display/Sound settings, save a note, add a task, remember personal info, check their notes/tasks, switch app tabs, make a phone call, send an SMS, or send a WhatsApp message), IMMEDIATELY invoke the corresponding tool function and then briefly confirm what you prepared or did.
-                - Calling, SMS, and WhatsApp with Safety Confirmation:
-                  * If the user asks to call someone, send an SMS, or send a WhatsApp message to a contact name without giving a phone number, call get_user_context first to check if their phone number is saved in memory.
-                  * Then ALWAYS invoke make_phone_call, send_sms, or send_whatsapp with whatever recipient_name, phone_number, and message details you have.
-                  * For user privacy and safety, those three tools open a confirmation dialog on screen (where the user can review, pick a contact, or edit the message) before opening the Dialer, SMS app, or WhatsApp. Clearly tell the user to tap Confirm on the screen. Never claim a call or message was already sent without confirmation.
-                - If the user asks about their saved notes, tasks, or remembered facts, call get_user_context first so your answer is grounded in real stored data.
+                - Whenever the user asks to perform an action on the phone (open YouTube, search Google/Chrome, open Camera, open WiFi/Bluetooth/Display/Sound settings, set Google Maps navigation, read incoming messages/notifications, search contacts, save a note, add a task, remember personal info, check their notes/tasks, switch app tabs, make a phone call, send an SMS, or send a WhatsApp message), IMMEDIATELY invoke the corresponding tool function and then briefly confirm what you did.
+                - Direct Calling & Contacts:
+                  * If the user asks to call someone by name (e.g., "Rahul ko call karo", "Call Mom"), call search_contacts or make_phone_call with recipient_name. When CALL_PHONE & READ_CONTACTS permissions are granted and a unique number is found, JULI places the call directly; otherwise a confirmation dialog opens on screen.
+                - Google Maps Navigation:
+                  * When the user asks to set a map or navigate somewhere (e.g., "Patna Junction ka map set kar do", "Navigate to India Gate"), IMMEDIATELY call set_map_navigation with the destination.
+                - Reading Messages & Notifications:
+                  * When the user asks to read messages or asks whose notification arrived (e.g., "Mera message padh kar sunao", "Kiska notification aaya hai?"), IMMEDIATELY call read_notifications and read back the sender, app, and message clearly. If notification access is disabled, politely tell them to enable Notification Reader in the Actions -> Alerts tab.
+                - SMS & WhatsApp Confirmation:
+                  * For user privacy and safety, send_sms and send_whatsapp prepare a confirmation dialog on screen (where the user can review or edit the message) before opening SMS or WhatsApp.
                 - Never invent tool results or pretend an action succeeded if the tool returned an error.
                 """.trimIndent()
             )
@@ -178,6 +184,39 @@ object JuliTools {
             description = "Gets the current local date and time on the user's phone.",
             parameters = emptyMap(),
             optionalParameters = emptyList()
+        ),
+        FunctionDeclaration(
+            name = "search_contacts",
+            description = "Searches the phone's Contacts and saved user memory by name to find a contact's phone number.",
+            parameters = mapOf(
+                "name_query" to Schema.string(description = "Name of the contact to search, e.g. 'Rahul' or 'Papa'.")
+            ),
+            optionalParameters = emptyList()
+        ),
+        FunctionDeclaration(
+            name = "set_map_navigation",
+            description = "Sets a Google Maps route or searches a place and starts navigation on the phone.",
+            parameters = mapOf(
+                "destination" to Schema.string(description = "Destination address, landmark, or city, e.g. 'India Gate, New Delhi' or 'Patna Junction'."),
+                "travel_mode" to Schema.enumeration(
+                    values = listOf("driving", "two_wheeler", "walking", "bicycling"),
+                    description = "Mode of travel."
+                ),
+                "action_type" to Schema.enumeration(
+                    values = listOf("navigate", "search"),
+                    description = "Use 'navigate' to start turn-by-turn route or 'search' to view place on map."
+                )
+            ),
+            optionalParameters = listOf("travel_mode", "action_type")
+        ),
+        FunctionDeclaration(
+            name = "read_notifications",
+            description = "Reads recent incoming notifications and messages (WhatsApp, SMS, Gmail, Calls, etc.) captured by JULI Notification Reader.",
+            parameters = mapOf(
+                "app_filter" to Schema.string(description = "Optional app filter like 'whatsapp', 'sms', 'messages', 'gmail', or 'all'."),
+                "limit" to Schema.integer(description = "Maximum number of recent notifications to return (default 5).")
+            ),
+            optionalParameters = listOf("app_filter", "limit")
         )
     )
 
@@ -189,7 +228,9 @@ class JuliToolExecutor(
     private val repository: JuliRepository,
     private val onNavigateTab: (String) -> Unit = {},
     private val onToolBadge: (String) -> Unit = {},
-    private val onRequestPendingAction: (PendingAction) -> Unit = {}
+    private val onRequestPendingAction: (PendingAction) -> Unit = {},
+    private val onDirectCallRequested: ((String, String) -> Unit)? = null,
+    private val onMapDestinationSet: (String, String) -> Unit = { _, _ -> }
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -243,26 +284,74 @@ class JuliToolExecutor(
             }
 
             "make_phone_call" -> {
-                val recipientName = args.stringArg("recipient_name").orEmpty()
-                val phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
-                val action = PendingAction.MakeCall(recipientName = recipientName, phoneNumber = phoneNumber)
-                mainHandler.post { onRequestPendingAction(action) }
-                val label = when {
-                    recipientName.isNotBlank() -> "Confirm Call: $recipientName"
-                    phoneNumber.isNotBlank() -> "Confirm Call: $phoneNumber"
-                    else -> "Confirm Phone Call"
+                var recipientName = args.stringArg("recipient_name").orEmpty()
+                var phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
+                var matchedCount = 0
+
+                if (phoneNumber.isBlank() && recipientName.isNotBlank()) {
+                    val contactMatches = ContactResolver.findContactsByName(context, recipientName)
+                    matchedCount = contactMatches.size
+                    if (contactMatches.size == 1) {
+                        recipientName = contactMatches.first().displayName
+                        phoneNumber = contactMatches.first().phoneNumber
+                    } else if (contactMatches.isNotEmpty()) {
+                        recipientName = contactMatches.first().displayName
+                        phoneNumber = contactMatches.first().phoneNumber
+                    } else {
+                        val memMatch = findPhoneInMemory(recipientName)
+                        if (memMatch.isNotBlank()) phoneNumber = memMatch
+                    }
                 }
-                label to buildJsonObject {
-                    put("status", JsonPrimitive("awaiting_user_confirmation"))
-                    put("recipient_name", JsonPrimitive(recipientName))
-                    put("phone_number", JsonPrimitive(phoneNumber))
-                    put("requires_number_input", JsonPrimitive(phoneNumber.isBlank()))
+
+                val canDirectCall = phoneNumber.isNotBlank() &&
+                    JuliAssistantPrefs.isDirectCallEnabled(context) &&
+                    ContactResolver.hasCallPhonePermission(context) &&
+                    matchedCount <= 1
+
+                if (canDirectCall) {
+                    mainHandler.post {
+                        if (onDirectCallRequested != null) {
+                            onDirectCallRequested.invoke(recipientName, phoneNumber)
+                        } else {
+                            MobileActionDispatcher.placeDirectCall(context, phoneNumber)
+                        }
+                    }
+                    val target = recipientName.ifBlank { phoneNumber }
+                    "Calling: $target" to buildJsonObject {
+                        put("status", JsonPrimitive("calling_directly"))
+                        put("recipient_name", JsonPrimitive(recipientName))
+                        put("phone_number", JsonPrimitive(phoneNumber))
+                    }
+                } else {
+                    val action = PendingAction.MakeCall(recipientName = recipientName, phoneNumber = phoneNumber)
+                    mainHandler.post { onRequestPendingAction(action) }
+                    val label = when {
+                        recipientName.isNotBlank() -> "Confirm Call: $recipientName"
+                        phoneNumber.isNotBlank() -> "Confirm Call: $phoneNumber"
+                        else -> "Confirm Phone Call"
+                    }
+                    label to buildJsonObject {
+                        put("status", JsonPrimitive("awaiting_user_confirmation"))
+                        put("recipient_name", JsonPrimitive(recipientName))
+                        put("phone_number", JsonPrimitive(phoneNumber))
+                        put("requires_number_input", JsonPrimitive(phoneNumber.isBlank()))
+                        put("contacts_permission_granted", JsonPrimitive(ContactResolver.hasReadContactsPermission(context)))
+                    }
                 }
             }
 
             "send_sms" -> {
-                val recipientName = args.stringArg("recipient_name").orEmpty()
-                val phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
+                var recipientName = args.stringArg("recipient_name").orEmpty()
+                var phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
+                if (phoneNumber.isBlank() && recipientName.isNotBlank()) {
+                    val contactMatch = ContactResolver.findContactsByName(context, recipientName).firstOrNull()
+                    if (contactMatch != null) {
+                        recipientName = contactMatch.displayName
+                        phoneNumber = contactMatch.phoneNumber
+                    } else {
+                        phoneNumber = findPhoneInMemory(recipientName)
+                    }
+                }
                 val message = args.stringArg("message").orEmpty()
                 val action = PendingAction.SendSms(
                     recipientName = recipientName,
@@ -281,8 +370,17 @@ class JuliToolExecutor(
             }
 
             "send_whatsapp" -> {
-                val recipientName = args.stringArg("recipient_name").orEmpty()
-                val phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
+                var recipientName = args.stringArg("recipient_name").orEmpty()
+                var phoneNumber = MobileActionDispatcher.sanitizePhoneNumber(args.stringArg("phone_number").orEmpty())
+                if (phoneNumber.isBlank() && recipientName.isNotBlank()) {
+                    val contactMatch = ContactResolver.findContactsByName(context, recipientName).firstOrNull()
+                    if (contactMatch != null) {
+                        recipientName = contactMatch.displayName
+                        phoneNumber = contactMatch.phoneNumber
+                    } else {
+                        phoneNumber = findPhoneInMemory(recipientName)
+                    }
+                }
                 val message = args.stringArg("message").orEmpty()
                 val action = PendingAction.SendWhatsApp(
                     recipientName = recipientName,
@@ -384,6 +482,65 @@ class JuliToolExecutor(
                 }
             }
 
+            "search_contacts" -> {
+                val query = args.stringArg("name_query").orEmpty()
+                val hasPerm = ContactResolver.hasReadContactsPermission(context)
+                val matches = ContactResolver.findContactsByName(context, query)
+                val memNumber = if (matches.isEmpty()) findPhoneInMemory(query) else ""
+                "Contacts: $query" to buildJsonObject {
+                    put("contacts_permission_granted", JsonPrimitive(hasPerm))
+                    put("matches", JsonArray(matches.map {
+                        buildJsonObject {
+                            put("name", JsonPrimitive(it.displayName))
+                            put("phone_number", JsonPrimitive(it.phoneNumber))
+                        }
+                    }))
+                    put("memory_phone_number", JsonPrimitive(memNumber))
+                }
+            }
+
+            "set_map_navigation" -> {
+                val destination = args.stringArg("destination").orEmpty()
+                val travelMode = args.stringArg("travel_mode") ?: "driving"
+                val actionType = args.stringArg("action_type") ?: "navigate"
+                if (destination.isNotBlank()) {
+                    mainHandler.post {
+                        onMapDestinationSet(destination, travelMode)
+                        if (actionType == "search") {
+                            MobileActionDispatcher.searchMapsPlace(context, destination)
+                        } else {
+                            MobileActionDispatcher.openMapsNavigation(context, destination, travelMode)
+                        }
+                    }
+                }
+                val label = if (destination.isBlank()) "Maps" else "Map: $destination"
+                label to buildJsonObject {
+                    put("status", JsonPrimitive(if (destination.isNotBlank()) "navigation_started" else "missing_destination"))
+                    put("destination", JsonPrimitive(destination))
+                    put("travel_mode", JsonPrimitive(travelMode))
+                }
+            }
+
+            "read_notifications" -> {
+                val filter = args.stringArg("app_filter")
+                val limit = args["limit"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 5
+                val accessEnabled = NotificationCenterStore.isNotificationAccessEnabled(context)
+                val items = NotificationCenterStore.filterByApp(filter, limit)
+                val timeFmt = SimpleDateFormat("hh:mm a", Locale.getDefault())
+                "Notifications (${items.size})" to buildJsonObject {
+                    put("notification_access_enabled", JsonPrimitive(accessEnabled))
+                    put("count", JsonPrimitive(items.size))
+                    put("notifications", JsonArray(items.map {
+                        buildJsonObject {
+                            put("app", JsonPrimitive(it.appName))
+                            put("sender", JsonPrimitive(it.sender))
+                            put("message", JsonPrimitive(it.message))
+                            put("time", JsonPrimitive(timeFmt.format(Date(it.timestamp))))
+                        }
+                    }))
+                }
+            }
+
             else -> {
                 "Unsupported Tool" to buildJsonObject {
                     put("error", JsonPrimitive("Unknown tool: ${call.name}"))
@@ -399,6 +556,23 @@ class JuliToolExecutor(
             id = call.id
         )
         return ToolExecutionResult(call.name, badge, responsePart)
+    }
+
+    private suspend fun findPhoneInMemory(name: String): String {
+        val lower = name.trim().lowercase()
+        if (lower.isEmpty()) return ""
+        return try {
+            val memories = repository.allMemory.first()
+            val match = memories.firstOrNull {
+                it.key.lowercase().contains(lower) || it.value.lowercase().contains(lower)
+            }
+            val digits = match?.value?.let {
+                Regex("(\\+?\\d[\\d\\s-]{7,14}\\d)").find(it)?.value
+            }.orEmpty()
+            MobileActionDispatcher.sanitizePhoneNumber(digits)
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     private fun Map<String, kotlinx.serialization.json.JsonElement>.stringArg(key: String): String? {

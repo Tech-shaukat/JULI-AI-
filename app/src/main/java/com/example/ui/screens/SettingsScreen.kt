@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,11 +82,22 @@ fun SettingsScreen(
     speechRate: Float,
     pitch: Float,
     isWakeWordActive: Boolean,
+    directCallEnabled: Boolean,
+    hasContactsPermission: Boolean,
+    hasCallPhonePermission: Boolean,
+    isNotificationAccessEnabled: Boolean,
+    autoAnnounceNotifs: Boolean,
+    readNotifContent: Boolean,
     memories: List<UserMemory>,
     onLanguageChange: (String) -> Unit,
     onSelectLiveVoice: (String) -> Unit,
     onSpeechParamsChange: (Float, Float) -> Unit,
     onToggleWakeWord: () -> Unit,
+    onToggleDirectCall: (Boolean) -> Unit,
+    onRequestCallPermissions: () -> Unit,
+    onToggleAutoAnnounceNotifs: (Boolean) -> Unit,
+    onToggleReadNotifContent: (Boolean) -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onDeleteMemory: (String) -> Unit,
     onRequestClearAllData: () -> Unit,
     modifier: Modifier = Modifier
@@ -148,6 +160,153 @@ fun SettingsScreen(
                         ),
                         modifier = Modifier.testTag("wake_word_switch")
                     )
+                }
+            }
+        }
+
+        // Section: Smart Phone Controls (Direct Calling & Notification Reader)
+        item {
+            Text(
+                text = "Smart Calling & Notification Reader",
+                color = CyberCyan,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SurfaceBorder),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Direct Voice Call by Name",
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (hasContactsPermission && hasCallPhonePermission) {
+                                    "Contacts & Call permissions granted"
+                                } else {
+                                    "Needs Contacts & Call Phone permission"
+                                },
+                                color = if (hasContactsPermission && hasCallPhonePermission) StateSuccess else TextDim,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = directCallEnabled,
+                            onCheckedChange = onToggleDirectCall,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DeepSpace,
+                                checkedTrackColor = StateSuccess
+                            ),
+                            modifier = Modifier.testTag("settings_direct_call_switch")
+                        )
+                    }
+
+                    if (!hasContactsPermission || !hasCallPhonePermission) {
+                        OutlinedButton(
+                            onClick = onRequestCallPermissions,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_grant_call_perms_button")
+                        ) {
+                            Text("Grant Contacts & Phone Permissions", color = CyberCyan, fontSize = 12.sp)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Announce Who Sent Notification",
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isNotificationAccessEnabled) {
+                                    "Notification Reader active"
+                                } else {
+                                    "Enable Notification Access to hear incoming alerts"
+                                },
+                                color = if (isNotificationAccessEnabled) StateSuccess else TextDim,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = autoAnnounceNotifs,
+                            onCheckedChange = onToggleAutoAnnounceNotifs,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DeepSpace,
+                                checkedTrackColor = CyberCyan
+                            ),
+                            modifier = Modifier.testTag("settings_auto_announce_switch")
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Also Speak Message Text",
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "नोटिफिकेशन के साथ मैसेज भी बोलकर सुनाएं",
+                                color = TextDim,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Switch(
+                            checked = readNotifContent,
+                            onCheckedChange = onToggleReadNotifContent,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DeepSpace,
+                                checkedTrackColor = NeonPurple
+                            ),
+                            modifier = Modifier.testTag("settings_read_notif_content_switch")
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenNotificationSettings,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("settings_notification_access_button")
+                    ) {
+                        Text(
+                            text = if (isNotificationAccessEnabled) {
+                                "Notification Reader Settings (Enabled)"
+                            } else {
+                                "Enable Notification Reader in Settings"
+                            },
+                            color = CyberCyan,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             }
         }

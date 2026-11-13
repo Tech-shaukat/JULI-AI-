@@ -71,6 +71,14 @@ class JuliBrain {
         val settingsMatch = matchSettingsCommand(lower, isHindi)
         if (settingsMatch != null) return settingsMatch
 
+        // 6.2. Google Maps Navigation commands
+        val mapMatch = matchMapCommand(query, lower, isHindi)
+        if (mapMatch != null) return mapMatch
+
+        // 6.3. Read Notifications / Messages commands
+        val notifMatch = matchNotificationReadCommand(lower, isHindi)
+        if (notifMatch != null) return notifMatch
+
         // 6.5. Communication commands (Phone Call, SMS, WhatsApp)
         val commMatch = matchCommunicationCommand(query, lower, isHindi, isBhojpuri)
         if (commMatch != null) return commMatch
@@ -288,6 +296,42 @@ class JuliBrain {
         return BrainAction.OpenSettings(settingType = type, speakResponse = speak, isHindi = isHindi)
     }
 
+    private fun matchMapCommand(raw: String, lower: String, isHindi: Boolean): BrainAction? {
+        val isMap = lower.contains("map") || lower.contains("navigate") || lower.contains("navigation") ||
+            lower.contains("rasta") || lower.contains("direction") || lower.contains("लोकेशन") ||
+            lower.contains("मैप") || lower.contains("रास्ता")
+        if (!isMap) return null
+
+        val dest = raw.replace(Regex("(?i)(google maps?|map|set karo|set kar do|laga do|kholo|navigate to|directions? to|rasta dikhao|ka rasta|ka map|direction to|please)"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (dest.isBlank()) return null
+
+        val speak = if (isHindi) "$dest के लिए Google Maps नेविगेशन सेट किया जा रहा है।" else "Setting Google Maps navigation to $dest."
+        return BrainAction.NavigateMap(
+            destination = dest,
+            travelMode = if (lower.contains("walk") || lower.contains("paidal")) "walking" else "driving",
+            speakResponse = speak,
+            isHindi = isHindi
+        )
+    }
+
+    private fun matchNotificationReadCommand(lower: String, isHindi: Boolean): BrainAction? {
+        val isNotif = lower.contains("notification") || lower.contains("नोटिफिकेशन") ||
+            lower.contains("message padh") || lower.contains("message read") ||
+            lower.contains("read message") || lower.contains("kiska message") ||
+            lower.contains("मैसेज पढ़") || lower.contains("संदेश पढ़")
+        if (!isNotif) return null
+
+        val filter = when {
+            lower.contains("whatsapp") || lower.contains("व्हाट्सएप") -> "whatsapp"
+            lower.contains("sms") -> "sms"
+            lower.contains("gmail") || lower.contains("mail") -> "gmail"
+            else -> null
+        }
+        return BrainAction.ReadNotifications(appFilter = filter, isHindi = isHindi)
+    }
+
     private fun matchCommunicationCommand(
         raw: String,
         lower: String,
@@ -298,8 +342,8 @@ class JuliBrain {
         val extractedPhone = phoneMatch?.value?.filter { it.isDigit() || it == '+' }.orEmpty()
 
         val isWhatsApp = lower.contains("whatsapp") || lower.contains("watsapp") || lower.contains("व्हाट्सएप")
-        val isSms = lower.contains("sms") || lower.contains("text message") || lower.contains("message bhejo") ||
-            lower.contains("संदेश") || lower.contains("मैसेज")
+        val isSms = (lower.contains("sms") || lower.contains("text message") || lower.contains("message bhejo") ||
+            lower.contains("संदेश") || lower.contains("मैसेज")) && !lower.contains("padh") && !lower.contains("read")
         val isCall = lower.contains("call ") || lower.startsWith("call") || lower.contains("phone lagao") ||
             lower.contains("call karo") || lower.contains("dial ") || lower.contains("कॉल") || lower.contains("फोन लगाओ")
 
@@ -338,15 +382,22 @@ class JuliBrain {
         }
 
         if (isCall) {
-            val speak = if (isBhojpuri) {
-                "कॉल लगावे खातिर स्क्रीन पर Confirm दबाईं।"
-            } else if (isHindi) {
-                "कॉल करने से पहले कृपया स्क्रीन पर Confirm दबाएँ।"
+            val extractedName = if (extractedPhone.isBlank()) {
+                raw.replace(Regex("(?i)(call|dial|phone|lagao|karo|ko|par|please|जल्दी|कॉल|फोन|लगाओ|करो|को)"), " ")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
             } else {
-                "Please confirm the phone call on screen."
+                ""
+            }
+            val speak = if (isBhojpuri) {
+                if (extractedName.isNotBlank()) "$extractedName के कॉल लगावल जा रहल बा।" else "कॉल लगावे खातिर स्क्रीन पर Confirm दबाईं।"
+            } else if (isHindi) {
+                if (extractedName.isNotBlank()) "$extractedName को कॉल लगाया जा रहा है।" else "कॉल करने से पहले कृपया स्क्रीन पर Confirm दबाएँ।"
+            } else {
+                if (extractedName.isNotBlank()) "Calling $extractedName." else "Please confirm the phone call on screen."
             }
             return BrainAction.CallPhone(
-                recipientName = "",
+                recipientName = extractedName,
                 phoneNumber = extractedPhone,
                 speakResponse = speak,
                 isHindi = isHindi

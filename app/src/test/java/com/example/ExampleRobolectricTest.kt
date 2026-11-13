@@ -14,6 +14,8 @@ import com.example.data.local.JuliDatabase
 import com.example.data.repository.JuliRepository
 import com.example.intents.MobileActionDispatcher
 import com.example.intents.PendingAction
+import com.example.service.CapturedNotification
+import com.example.service.NotificationCenterStore
 import com.example.speech.WakeWordDetector
 import com.google.firebase.ai.type.FunctionCallPart
 import kotlinx.coroutines.delay
@@ -112,8 +114,8 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test Gemini Live declarations expose all 13 task tools and female voices`() {
-        assertEquals(13, JuliTools.functionDeclarations.size)
+    fun `test Gemini Live declarations expose all 16 task tools and female voices`() {
+        assertEquals(16, JuliTools.functionDeclarations.size)
         assertTrue(JuliLiveManager.femaleVoices.any { it.id == "Sulafat" })
         assertTrue(JuliLiveManager.femaleVoices.any { it.id == "Aoede" })
     }
@@ -258,5 +260,57 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val initialized = ensureFirebaseInitialized(context)
         assertTrue("FirebaseApp should initialize when google-services.json is bundled", initialized)
+    }
+
+    @Test
+    fun `test JuliBrain parses Map navigation Notification reading and Contact-name Calling`() {
+        val brain = JuliBrain()
+
+        val mapAction = brain.processQuery("Patna Junction ka map set kar do", "hi")
+        assertTrue("Action should be NavigateMap", mapAction is BrainAction.NavigateMap)
+        assertTrue((mapAction as BrainAction.NavigateMap).destination.contains("Patna Junction", ignoreCase = true))
+
+        val notifAction = brain.processQuery("WhatsApp notification aur message padho", "hi")
+        assertTrue("Action should be ReadNotifications", notifAction is BrainAction.ReadNotifications)
+        assertEquals("whatsapp", (notifAction as BrainAction.ReadNotifications).appFilter)
+
+        val callByName = brain.processQuery("Rahul ko call karo", "hi")
+        assertTrue("Action should be CallPhone", callByName is BrainAction.CallPhone)
+        assertEquals("Rahul", (callByName as BrainAction.CallPhone).recipientName)
+    }
+
+    @Test
+    fun `test NotificationCenterStore records and filters notifications`() {
+        NotificationCenterStore.clearAll()
+        NotificationCenterStore.record(
+            CapturedNotification(
+                id = "wa_1",
+                packageName = "com.whatsapp",
+                appName = "WhatsApp",
+                sender = "Rahul",
+                message = "Main station par pahunch gaya hoon",
+                timestamp = 1000L
+            )
+        )
+        NotificationCenterStore.record(
+            CapturedNotification(
+                id = "sms_1",
+                packageName = "com.google.android.apps.messaging",
+                appName = "Messages",
+                sender = "Bank",
+                message = "OTP is 123456",
+                timestamp = 6000L
+            )
+        )
+
+        assertEquals(2, NotificationCenterStore.notifications.value.size)
+        val waOnly = NotificationCenterStore.filterByApp("whatsapp", 5)
+        assertEquals(1, waOnly.size)
+        assertEquals("Rahul", waOnly.first().sender)
+
+        val smsOnly = NotificationCenterStore.filterByApp("sms", 5)
+        assertEquals(1, smsOnly.size)
+        assertEquals("Bank", smsOnly.first().sender)
+        NotificationCenterStore.clearAll()
     }
 }

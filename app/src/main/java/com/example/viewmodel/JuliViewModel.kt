@@ -17,10 +17,17 @@ import com.example.data.model.TaskItem
 import com.example.data.model.UserMemory
 import com.example.data.repository.JuliRepository
 import android.content.Intent
+import android.graphics.Bitmap
+import com.example.ai.JuliImageStudioClient
+import com.example.ai.JuliVideoStudioClient
 import com.example.brain.BrainAction
 import com.example.brain.JuliBrain
+import com.example.intents.ContactResolver
+import com.example.intents.JuliAssistantPrefs
 import com.example.intents.MobileActionDispatcher
 import com.example.intents.PendingAction
+import com.example.service.CapturedNotification
+import com.example.service.NotificationCenterStore
 import com.example.service.WakeWordEvent
 import com.example.service.WakeWordService
 import com.example.speech.JuliSpeechManager
@@ -33,8 +40,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 enum class NavigationTab {
     ASSISTANT,
@@ -42,6 +51,37 @@ enum class NavigationTab {
     PRODUCTIVITY,
     ACTIONS,
     SETTINGS
+}
+
+enum class ActionsSubTab {
+    CALLS,
+    MAPS,
+    ALERTS,
+    STUDIO
+}
+
+sealed interface ImageStudioUiState {
+    data object Idle : ImageStudioUiState
+    data object Loading : ImageStudioUiState
+    data class Success(
+        val bitmap: Bitmap,
+        val file: File,
+        val prompt: String
+    ) : ImageStudioUiState
+    data class Error(val message: String) : ImageStudioUiState
+}
+
+sealed interface VideoStudioUiState {
+    data object Idle : VideoStudioUiState
+    data object Loading : VideoStudioUiState
+    data class Success(
+        val file: File,
+        val interactionId: String?,
+        val aspectRatio: String,
+        val summaryText: String?,
+        val prompt: String
+    ) : VideoStudioUiState
+    data class Error(val message: String) : VideoStudioUiState
 }
 
 class JuliViewModel(application: Application) : AndroidViewModel(application) {
@@ -120,7 +160,44 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastActionBadge = MutableStateFlow<String?>(null)
     val lastActionBadge: StateFlow<String?> = _lastActionBadge.asStateFlow()
 
+    private val _actionsSubTab = MutableStateFlow(ActionsSubTab.CALLS)
+    val actionsSubTab: StateFlow<ActionsSubTab> = _actionsSubTab.asStateFlow()
+
+    private val _mapDestination = MutableStateFlow("")
+    val mapDestination: StateFlow<String> = _mapDestination.asStateFlow()
+
+    private val _mapTravelMode = MutableStateFlow("driving")
+    val mapTravelMode: StateFlow<String> = _mapTravelMode.asStateFlow()
+
+    private val _directCallEnabled = MutableStateFlow(JuliAssistantPrefs.isDirectCallEnabled(application))
+    val directCallEnabled: StateFlow<Boolean> = _directCallEnabled.asStateFlow()
+
+    private val _autoAnnounceNotifs = MutableStateFlow(JuliAssistantPrefs.isAutoAnnounceNotifications(application))
+    val autoAnnounceNotifs: StateFlow<Boolean> = _autoAnnounceNotifs.asStateFlow()
+
+    private val _readNotifContent = MutableStateFlow(JuliAssistantPrefs.isReadNotificationContent(application))
+    val readNotifContent: StateFlow<Boolean> = _readNotifContent.asStateFlow()
+
+    private val _hasContactsPermission = MutableStateFlow(ContactResolver.hasReadContactsPermission(application))
+    val hasContactsPermission: StateFlow<Boolean> = _hasContactsPermission.asStateFlow()
+
+    private val _hasCallPhonePermission = MutableStateFlow(ContactResolver.hasCallPhonePermission(application))
+    val hasCallPhonePermission: StateFlow<Boolean> = _hasCallPhonePermission.asStateFlow()
+
+    private val _isNotificationAccessEnabled = MutableStateFlow(NotificationCenterStore.isNotificationAccessEnabled(application))
+    val isNotificationAccessEnabled: StateFlow<Boolean> = _isNotificationAccessEnabled.asStateFlow()
+
+    val capturedNotifications: StateFlow<List<CapturedNotification>> = NotificationCenterStore.notifications
+
+    private val _imageStudioState = MutableStateFlow<ImageStudioUiState>(ImageStudioUiState.Idle)
+    val imageStudioState: StateFlow<ImageStudioUiState> = _imageStudioState.asStateFlow()
+
+    private val _videoStudioState = MutableStateFlow<VideoStudioUiState>(VideoStudioUiState.Idle)
+    val videoStudioState: StateFlow<VideoStudioUiState> = _videoStudioState.asStateFlow()
+
     private val localBrain = JuliBrain()
+    private val imageStudioClient by lazy { JuliImageStudioClient(getApplication()) }
+    private val videoStudioClient by lazy { JuliVideoStudioClient(getApplication()) }
 
     private lateinit var liveManager: JuliLiveManager
 
@@ -145,6 +222,13 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
             },
             onRequestPendingAction = { action ->
                 _pendingAction.value = action
+            },
+            onDirectCallRequested = { recipientName, phoneNumber ->
+                placeDirectCallAndAnnounce(recipientName, phoneNumber)
+            },
+            onMapDestinationSet = { destination, travelMode ->
+                _mapDestination.value = destination
+                _mapTravelMode.value = travelMode
             }
         )
     }
@@ -328,6 +412,307 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
         _currentTab.value = tab
     }
 
+    fun selectActionsSubTab(subTab: ActionsSubTab) {
+        _actionsSubTab.value = subTab
+    }
+
+    fun refreshDevicePermissions() {
+        val ctx = getApplication<Application>()
+        _hasContactsPermission.value = ContactResolver.hasReadContactsPermission(ctx)
+        _hasCallPhonePermission.value = ContactResolver.hasCallPhonePermission(ctx)
+        _isNotificationAccessEnabled.value = NotificationCenterStore.isNotificationAccessEnabled(ctx)
+    }
+
+    fun setDirectCallEnabled(enabled: Boolean) {
+        JuliAssistantPrefs.setDirectCallEnabled(getApplication(), enabled)
+        _directCallEnabled.value = enabled
+    }
+
+    fun setAutoAnnounceNotifications(enabled: Boolean) {
+        JuliAssistantPrefs.setAutoAnnounceNotifications(getApplication(), enabled)
+        _autoAnnounceNotifs.value = enabled
+    }
+
+    fun setReadNotificationContent(enabled: Boolean) {
+        JuliAssistantPrefs.setReadNotificationContent(getApplication(), enabled)
+        _readNotifContent.value = enabled
+    }
+
+    fun setMapDestination(destination: String, travelMode: String = _mapTravelMode.value) {
+        _mapDestination.value = destination
+        _mapTravelMode.value = travelMode
+    }
+
+    fun launchMapNavigation(context: Context, destination: String, travelMode: String = _mapTravelMode.value) {
+        val clean = destination.trim()
+        if (clean.isEmpty()) return
+        _mapDestination.value = clean
+        _mapTravelMode.value = travelMode
+        val ok = MobileActionDispatcher.openMapsNavigation(context, clean, travelMode)
+        if (ok) {
+            _lastActionBadge.value = "Map: $clean"
+            speakText("$clean के लिए Google Maps नेविगेशन शुरू कर रही हूँ।", isHindi = true)
+        } else {
+            _errorMessage.value = "Google Maps इस डिवाइस पर खोला नहीं जा सका।"
+        }
+    }
+
+    fun searchMapPlace(context: Context, query: String) {
+        val clean = query.trim()
+        if (clean.isEmpty()) return
+        _mapDestination.value = clean
+        val ok = MobileActionDispatcher.searchMapsPlace(context, clean)
+        if (ok) {
+            _lastActionBadge.value = "Place: $clean"
+        } else {
+            _errorMessage.value = "Google Maps इस डिवाइस पर खोला नहीं जा सका।"
+        }
+    }
+
+    fun readNotificationAloud(item: CapturedNotification) {
+        val spoken = if (item.message.isNotBlank()) {
+            "${item.appName} से ${item.sender} का संदेश: ${item.message}"
+        } else {
+            "${item.appName} से ${item.sender} का नोटिफिकेशन आया है।"
+        }
+        speakText(spoken, isHindi = true)
+    }
+
+    fun readRecentNotifications(appFilter: String? = null) {
+        viewModelScope.launch {
+            buildAndSpeakNotificationsSummary(appFilter, isHindi = _language.value != "en")
+        }
+    }
+
+    fun clearNotifications() {
+        NotificationCenterStore.clearAll()
+    }
+
+    private suspend fun buildAndSpeakNotificationsSummary(appFilter: String?, isHindi: Boolean) {
+        val ctx = getApplication<Application>()
+        val accessEnabled = NotificationCenterStore.isNotificationAccessEnabled(ctx)
+        _isNotificationAccessEnabled.value = accessEnabled
+        if (!accessEnabled) {
+            val msg = if (isHindi) {
+                "मैसेज और नोटिफिकेशन पढ़ने के लिए कृपया Actions के Alerts टैब में Notification Reader चालू करें।"
+            } else {
+                "Please enable Notification Reader access in the Actions -> Alerts tab so I can read incoming messages and notifications."
+            }
+            _currentTab.value = NavigationTab.ACTIONS
+            _actionsSubTab.value = ActionsSubTab.ALERTS
+            finishLocalFallback(msg, isHindi, "Enable Alerts")
+            return
+        }
+
+        val items = NotificationCenterStore.filterByApp(appFilter, limit = 5)
+        if (items.isEmpty()) {
+            val emptyMsg = if (isHindi) {
+                "अभी कोई नया नोटिफिकेशन या मैसेज नहीं आया है।"
+            } else {
+                "There are no recent notifications or messages right now."
+            }
+            finishLocalFallback(emptyMsg, isHindi, "Alerts (0)")
+            return
+        }
+
+        val summary = buildString {
+            if (isHindi) {
+                append("आपके हाल के ${items.size} नोटिफिकेशन हैं। ")
+                items.forEachIndexed { idx, item ->
+                    append("${idx + 1}: ${item.appName} पर ${item.sender}")
+                    if (item.message.isNotBlank()) {
+                        append(" ने लिखा है: ${item.message}। ")
+                    } else {
+                        append(" का नोटिफिकेशन है। ")
+                    }
+                }
+            } else {
+                append("You have ${items.size} recent notifications. ")
+                items.forEachIndexed { idx, item ->
+                    append("${idx + 1}: From ${item.sender} on ${item.appName}")
+                    if (item.message.isNotBlank()) {
+                        append(": ${item.message}. ")
+                    } else {
+                        append(". ")
+                    }
+                }
+            }
+        }
+        finishLocalFallback(summary, isHindi, "Alerts (${items.size})")
+    }
+
+    fun callContactOrPrompt(context: Context, query: String) {
+        viewModelScope.launch {
+            val trimmed = query.trim()
+            if (trimmed.isEmpty()) {
+                _pendingAction.value = PendingAction.MakeCall()
+                return@launch
+            }
+            val directDigits = MobileActionDispatcher.sanitizePhoneNumber(trimmed)
+            val isPhoneNumber = directDigits.count { it.isDigit() } >= 6
+            if (isPhoneNumber) {
+                if (JuliAssistantPrefs.isDirectCallEnabled(context) && ContactResolver.hasCallPhonePermission(context)) {
+                    placeDirectCallAndAnnounce(trimmed, directDigits)
+                } else {
+                    _pendingAction.value = PendingAction.MakeCall(phoneNumber = directDigits)
+                }
+                return@launch
+            }
+
+            val matches = ContactResolver.findContactsByName(context, trimmed)
+            val memPhone = if (matches.isEmpty()) findPhoneInMemory(trimmed) else ""
+            when {
+                matches.size == 1 && JuliAssistantPrefs.isDirectCallEnabled(context) && ContactResolver.hasCallPhonePermission(context) -> {
+                    val m = matches.first()
+                    placeDirectCallAndAnnounce(m.displayName, m.phoneNumber)
+                }
+                matches.isNotEmpty() -> {
+                    val m = matches.first()
+                    _pendingAction.value = PendingAction.MakeCall(recipientName = m.displayName, phoneNumber = m.phoneNumber)
+                }
+                memPhone.isNotBlank() && JuliAssistantPrefs.isDirectCallEnabled(context) && ContactResolver.hasCallPhonePermission(context) -> {
+                    placeDirectCallAndAnnounce(trimmed, memPhone)
+                }
+                else -> {
+                    _pendingAction.value = PendingAction.MakeCall(recipientName = trimmed, phoneNumber = memPhone)
+                }
+            }
+        }
+    }
+
+    private fun placeDirectCallAndAnnounce(recipientName: String, phoneNumber: String) {
+        val ctx = getApplication<Application>()
+        val target = recipientName.ifBlank { phoneNumber }
+        val ok = MobileActionDispatcher.placeDirectCall(ctx, phoneNumber)
+        if (ok) {
+            _lastActionBadge.value = "Calling: $target"
+            viewModelScope.launch {
+                repository.addMessage(
+                    text = "$target ($phoneNumber) को डायरेक्ट कॉल लगाया गया।",
+                    isUser = false,
+                    actionBadge = "Direct Call",
+                    language = "hi"
+                )
+            }
+            speakText("$target को कॉल लगा रही हूँ।", isHindi = true)
+        } else {
+            _errorMessage.value = "कॉल शुरू नहीं की जा सकी।"
+        }
+    }
+
+    private suspend fun findPhoneInMemory(name: String): String {
+        val lower = name.trim().lowercase()
+        if (lower.isEmpty()) return ""
+        return try {
+            val memories = repository.allMemory.first()
+            val match = memories.firstOrNull {
+                it.key.lowercase().contains(lower) || it.value.lowercase().contains(lower)
+            }
+            val digits = match?.value?.let {
+                Regex("(\\+?\\d[\\d\\s-]{7,14}\\d)").find(it)?.value
+            }.orEmpty()
+            MobileActionDispatcher.sanitizePhoneNumber(digits)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun generateImage(prompt: String, aspectRatio: String = "1:1") {
+        viewModelScope.launch {
+            _imageStudioState.value = ImageStudioUiState.Loading
+            try {
+                val (bitmap, file) = imageStudioClient.generateImage(prompt, aspectRatio)
+                _imageStudioState.value = ImageStudioUiState.Success(
+                    bitmap = bitmap,
+                    file = file,
+                    prompt = prompt.trim()
+                )
+                _lastActionBadge.value = "Image Created"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _imageStudioState.value = ImageStudioUiState.Error(
+                    e.localizedMessage ?: "Image generation failed."
+                )
+            }
+        }
+    }
+
+    fun editImage(inputBitmap: Bitmap, editInstruction: String) {
+        viewModelScope.launch {
+            _imageStudioState.value = ImageStudioUiState.Loading
+            try {
+                val (bitmap, file) = imageStudioClient.editImage(inputBitmap, editInstruction)
+                _imageStudioState.value = ImageStudioUiState.Success(
+                    bitmap = bitmap,
+                    file = file,
+                    prompt = editInstruction.trim()
+                )
+                _lastActionBadge.value = "Image Edited"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _imageStudioState.value = ImageStudioUiState.Error(
+                    e.localizedMessage ?: "Image editing failed."
+                )
+            }
+        }
+    }
+
+    fun shareGeneratedMedia(file: File, mimeType: String, title: String) {
+        val ok = imageStudioClient.shareFile(file, mimeType, title)
+        if (!ok) {
+            _errorMessage.value = "फ़ाइल शेयर नहीं की जा सकी।"
+        }
+    }
+
+    fun resetImageStudio() {
+        _imageStudioState.value = ImageStudioUiState.Idle
+    }
+
+    fun generateVideo(prompt: String, aspectRatio: String = "16:9", usePreviousInteraction: Boolean = false) {
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isEmpty()) {
+            _videoStudioState.value = VideoStudioUiState.Error("कृपया वीडियो बनाने के लिए प्रॉम्प्ट लिखें।")
+            return
+        }
+        val prevId = if (usePreviousInteraction) {
+            (_videoStudioState.value as? VideoStudioUiState.Success)?.interactionId
+        } else {
+            null
+        }
+        viewModelScope.launch {
+            _videoStudioState.value = VideoStudioUiState.Loading
+            try {
+                val result = videoStudioClient.generateVideo(
+                    prompt = cleanPrompt,
+                    aspectRatio = aspectRatio,
+                    previousInteractionId = prevId
+                )
+                _videoStudioState.value = VideoStudioUiState.Success(
+                    file = result.videoFile,
+                    interactionId = result.interactionId,
+                    aspectRatio = result.aspectRatio,
+                    summaryText = result.summaryText,
+                    prompt = cleanPrompt
+                )
+                _lastActionBadge.value = "Video Ready"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _videoStudioState.value = VideoStudioUiState.Error(
+                    e.localizedMessage ?: "Video generation failed."
+                )
+            }
+        }
+    }
+
+    fun hasVideoApiKey(): Boolean = videoStudioClient.hasApiKey()
+
+    fun resetVideoStudio() {
+        _videoStudioState.value = VideoStudioUiState.Idle
+    }
+
     fun toggleWakeWordService(context: Context, hasRecordPermission: Boolean, onRequestPermission: () -> Unit) {
         if (!hasRecordPermission) {
             onRequestPermission()
@@ -506,13 +891,23 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             is PendingAction.MakeCall -> {
-                val ok = MobileActionDispatcher.openDialer(context, action.phoneNumber)
+                val useDirectCall = JuliAssistantPrefs.isDirectCallEnabled(context) &&
+                    ContactResolver.hasCallPhonePermission(context)
+                val ok = if (useDirectCall) {
+                    MobileActionDispatcher.placeDirectCall(context, action.phoneNumber)
+                } else {
+                    MobileActionDispatcher.openDialer(context, action.phoneNumber)
+                }
                 val target = action.recipientName.ifBlank { action.phoneNumber }
                 if (ok) {
-                    _lastActionBadge.value = "Dialer: $target"
+                    _lastActionBadge.value = if (useDirectCall) "Calling: $target" else "Dialer: $target"
                     viewModelScope.launch {
                         repository.addMessage(
-                            text = "Phone Dialer opened for $target (${action.phoneNumber}).",
+                            text = if (useDirectCall) {
+                                "Direct call placed to $target (${action.phoneNumber})."
+                            } else {
+                                "Phone Dialer opened for $target (${action.phoneNumber})."
+                            },
                             isUser = false,
                             actionBadge = "Phone Call"
                         )
@@ -654,8 +1049,30 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                 true
             }
             is BrainAction.CallPhone -> {
-                _pendingAction.value = PendingAction.MakeCall(action.recipientName, action.phoneNumber)
-                finishLocalFallback(action.speakResponse, action.isHindi, "Confirm Call")
+                var resolvedName = action.recipientName
+                var resolvedPhone = MobileActionDispatcher.sanitizePhoneNumber(action.phoneNumber)
+                var matchCount = 0
+                if (resolvedPhone.isBlank() && resolvedName.isNotBlank()) {
+                    val matches = ContactResolver.findContactsByName(context, resolvedName)
+                    matchCount = matches.size
+                    if (matches.isNotEmpty()) {
+                        resolvedName = matches.first().displayName
+                        resolvedPhone = matches.first().phoneNumber
+                    } else {
+                        resolvedPhone = findPhoneInMemory(resolvedName)
+                    }
+                }
+                val canDirectCall = resolvedPhone.isNotBlank() &&
+                    JuliAssistantPrefs.isDirectCallEnabled(context) &&
+                    ContactResolver.hasCallPhonePermission(context) &&
+                    matchCount <= 1
+
+                if (canDirectCall) {
+                    placeDirectCallAndAnnounce(resolvedName, resolvedPhone)
+                } else {
+                    _pendingAction.value = PendingAction.MakeCall(resolvedName, resolvedPhone)
+                    finishLocalFallback(action.speakResponse, action.isHindi, "Confirm Call")
+                }
                 true
             }
             is BrainAction.SendSms -> {
@@ -666,6 +1083,19 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
             is BrainAction.SendWhatsApp -> {
                 _pendingAction.value = PendingAction.SendWhatsApp(action.recipientName, action.phoneNumber, action.message)
                 finishLocalFallback(action.speakResponse, action.isHindi, "Confirm WhatsApp")
+                true
+            }
+            is BrainAction.NavigateMap -> {
+                _mapDestination.value = action.destination
+                _mapTravelMode.value = action.travelMode
+                _currentTab.value = NavigationTab.ACTIONS
+                _actionsSubTab.value = ActionsSubTab.MAPS
+                MobileActionDispatcher.openMapsNavigation(context, action.destination, action.travelMode)
+                finishLocalFallback(action.speakResponse, action.isHindi, "Map: ${action.destination}")
+                true
+            }
+            is BrainAction.ReadNotifications -> {
+                buildAndSpeakNotificationsSummary(action.appFilter, action.isHindi)
                 true
             }
             is BrainAction.CreateNote -> {

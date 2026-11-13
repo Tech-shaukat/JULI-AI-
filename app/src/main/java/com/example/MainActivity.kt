@@ -58,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,6 +66,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -152,9 +156,33 @@ fun JuliMainApp(viewModel: JuliViewModel) {
     val liveUiState by viewModel.liveUiState.collectAsState()
     val lastActionBadge by viewModel.lastActionBadge.collectAsState()
     val bannerError by viewModel.bannerError.collectAsState()
+    val actionsSubTab by viewModel.actionsSubTab.collectAsState()
+    val mapDestination by viewModel.mapDestination.collectAsState()
+    val mapTravelMode by viewModel.mapTravelMode.collectAsState()
+    val directCallEnabled by viewModel.directCallEnabled.collectAsState()
+    val autoAnnounceNotifs by viewModel.autoAnnounceNotifs.collectAsState()
+    val readNotifContent by viewModel.readNotifContent.collectAsState()
+    val hasContactsPermission by viewModel.hasContactsPermission.collectAsState()
+    val hasCallPhonePermission by viewModel.hasCallPhonePermission.collectAsState()
+    val isNotificationAccessEnabled by viewModel.isNotificationAccessEnabled.collectAsState()
+    val capturedNotifications by viewModel.capturedNotifications.collectAsState()
+    val imageStudioState by viewModel.imageStudioState.collectAsState()
+    val videoStudioState by viewModel.videoStudioState.collectAsState()
 
     var showMicRationale by remember { mutableStateOf(false) }
     var pendingMicPurpose by remember { mutableStateOf<String?>(null) }
+
+    // Refresh runtime permissions & Notification Listener status whenever returning from system settings
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshDevicePermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // BackHandler: Return to Assistant tab when user presses system Back
     BackHandler(enabled = currentTab != NavigationTab.ASSISTANT) {
@@ -222,6 +250,12 @@ fun JuliMainApp(viewModel: JuliViewModel) {
             pendingMicPurpose = null
             showMicRationale = true
         }
+    }
+
+    val callAndContactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        viewModel.refreshDevicePermissions()
     }
 
     val speechPopupLauncher = rememberLauncherForActivityResult(
@@ -562,6 +596,8 @@ fun JuliMainApp(viewModel: JuliViewModel) {
 
                 NavigationTab.ACTIONS -> {
                     ActionsScreen(
+                        selectedSubTab = actionsSubTab,
+                        onSelectSubTab = { viewModel.selectActionsSubTab(it) },
                         isWakeWordActive = isWakeWordActive,
                         onToggleWakeWord = {
                             if (!hasMicPermission) {
@@ -574,13 +610,49 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                                 viewModel.toggleWakeWordService(context, true) {}
                             }
                         },
+                        hasContactsPermission = hasContactsPermission,
+                        hasCallPhonePermission = hasCallPhonePermission,
+                        directCallEnabled = directCallEnabled,
+                        onRequestCallPermissions = {
+                            callAndContactsPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_CONTACTS,
+                                    Manifest.permission.CALL_PHONE
+                                )
+                            )
+                        },
+                        onToggleDirectCall = { viewModel.setDirectCallEnabled(it) },
+                        onCallByNameOrNumber = { query -> viewModel.callContactOrPrompt(context, query) },
                         onRequestCall = { viewModel.setPendingAction(PendingAction.MakeCall()) },
                         onRequestSms = { viewModel.setPendingAction(PendingAction.SendSms()) },
                         onRequestWhatsApp = { viewModel.setPendingAction(PendingAction.SendWhatsApp()) },
                         onOpenYouTube = { MobileActionDispatcher.openYouTube(context) },
                         onOpenChrome = { MobileActionDispatcher.openChrome(context) },
                         onOpenCamera = { MobileActionDispatcher.openCamera(context) },
-                        onOpenSettings = { type -> MobileActionDispatcher.openSettings(context, type) }
+                        onOpenSettings = { type -> MobileActionDispatcher.openSettings(context, type) },
+                        mapDestination = mapDestination,
+                        mapTravelMode = mapTravelMode,
+                        onMapDestinationChange = { dest -> viewModel.setMapDestination(dest, mapTravelMode) },
+                        onMapTravelModeChange = { mode -> viewModel.setMapDestination(mapDestination, mode) },
+                        onStartMapNavigation = { dest, mode -> viewModel.launchMapNavigation(context, dest, mode) },
+                        onSearchMapPlace = { query -> viewModel.searchMapPlace(context, query) },
+                        isNotificationAccessEnabled = isNotificationAccessEnabled,
+                        autoAnnounceNotifs = autoAnnounceNotifs,
+                        readNotifContent = readNotifContent,
+                        capturedNotifications = capturedNotifications,
+                        onOpenNotificationSettings = { MobileActionDispatcher.openNotificationListenerSettings(context) },
+                        onToggleAutoAnnounceNotifs = { viewModel.setAutoAnnounceNotifications(it) },
+                        onToggleReadNotifContent = { viewModel.setReadNotificationContent(it) },
+                        onReadAllNotificationsAloud = { viewModel.readRecentNotifications() },
+                        onReadSingleNotificationAloud = { item -> viewModel.readNotificationAloud(item) },
+                        onClearNotifications = { viewModel.clearNotifications() },
+                        imageStudioState = imageStudioState,
+                        videoStudioState = videoStudioState,
+                        hasVideoApiKey = viewModel.hasVideoApiKey(),
+                        onGenerateImage = { prompt, ratio -> viewModel.generateImage(prompt, ratio) },
+                        onEditImage = { bmp, prompt -> viewModel.editImage(bmp, prompt) },
+                        onGenerateVideo = { prompt, ratio, followUp -> viewModel.generateVideo(prompt, ratio, followUp) },
+                        onShareGeneratedMedia = { file, mime, title -> viewModel.shareGeneratedMedia(file, mime, title) }
                     )
                 }
 
@@ -591,6 +663,12 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         speechRate = speechRate,
                         pitch = pitch,
                         isWakeWordActive = isWakeWordActive,
+                        directCallEnabled = directCallEnabled,
+                        hasContactsPermission = hasContactsPermission,
+                        hasCallPhonePermission = hasCallPhonePermission,
+                        isNotificationAccessEnabled = isNotificationAccessEnabled,
+                        autoAnnounceNotifs = autoAnnounceNotifs,
+                        readNotifContent = readNotifContent,
                         memories = memories,
                         onLanguageChange = { viewModel.setLanguage(it) },
                         onSelectLiveVoice = { viewModel.setLiveVoice(it) },
@@ -606,6 +684,18 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                                 viewModel.toggleWakeWordService(context, true) {}
                             }
                         },
+                        onToggleDirectCall = { viewModel.setDirectCallEnabled(it) },
+                        onRequestCallPermissions = {
+                            callAndContactsPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_CONTACTS,
+                                    Manifest.permission.CALL_PHONE
+                                )
+                            )
+                        },
+                        onToggleAutoAnnounceNotifs = { viewModel.setAutoAnnounceNotifications(it) },
+                        onToggleReadNotifContent = { viewModel.setReadNotificationContent(it) },
+                        onOpenNotificationSettings = { MobileActionDispatcher.openNotificationListenerSettings(context) },
                         onDeleteMemory = { key -> viewModel.deleteMemory(key) },
                         onRequestClearAllData = { viewModel.clearAllData() }
                     )
