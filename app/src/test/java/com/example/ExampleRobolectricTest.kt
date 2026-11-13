@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.ai.JuliLiveManager
 import com.example.ai.JuliToolExecutor
 import com.example.ai.JuliTools
+import com.example.ai.ensureFirebaseInitialized
 import com.example.brain.BrainAction
 import com.example.brain.JuliBrain
 import com.example.data.local.JuliDatabase
@@ -250,5 +251,12 @@ class ExampleRobolectricTest {
         val waAction = brain.processQuery("WhatsApp bhejo: Namaste", "hi")
         assertTrue(waAction is BrainAction.SendWhatsApp)
         assertEquals("Namaste", (waAction as BrainAction.SendWhatsApp).message)
+    }
+
+    @Test
+    fun `test ensureFirebaseInitialized initializes cleanly when google-services config is bundled`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val initialized = ensureFirebaseInitialized(context)
+        assertTrue("FirebaseApp should initialize when google-services.json is bundled", initialized)
     }
 }

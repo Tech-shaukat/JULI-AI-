@@ -1,5 +1,6 @@
 package com.example.ai
 
+import android.content.Context
 import android.util.Log
 import com.example.data.repository.JuliRepository
 import com.google.firebase.Firebase
@@ -57,6 +58,7 @@ data class LiveUiState(
 
 @OptIn(PublicPreviewAPI::class)
 class JuliLiveManager(
+    private val context: Context,
     private val repository: JuliRepository,
     private val toolExecutor: JuliToolExecutor
 ) {
@@ -122,6 +124,11 @@ class JuliLiveManager(
         )
 
         try {
+            if (!ensureFirebaseInitialized(context)) {
+                throw IllegalStateException(
+                    "Firebase config (google-services.json) इस APK में मौजूद नहीं है। कृपया GitHub repo में app/google-services.json जोड़कर APK फिर से बिल्ड करें।"
+                )
+            }
             val model = buildLiveModel(_state.value.selectedVoice, languageCode)
             val session = withTimeout(30_000L) {
                 model.connect()

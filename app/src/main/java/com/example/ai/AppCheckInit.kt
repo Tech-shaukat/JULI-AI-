@@ -17,10 +17,31 @@ private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
+fun ensureFirebaseInitialized(context: Context): Boolean {
+    return try {
+        val appContext = context.applicationContext ?: context
+        if (FirebaseApp.getApps(appContext).isNotEmpty()) {
+            true
+        } else {
+            val initialized = FirebaseApp.initializeApp(appContext)
+            if (initialized == null) {
+                Log.e(TAG, "FirebaseApp.initializeApp returned null; google-services.json may be missing from APK.")
+                false
+            } else {
+                true
+            }
+        }
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to initialize FirebaseApp", e)
+        false
+    }
+}
+
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            FirebaseApp.initializeApp(context)
+        if (!ensureFirebaseInitialized(context)) {
+            Log.e(TAG, "Skipping App Check setup because FirebaseApp could not be initialized.")
+            return
         }
 
         val siteKey = resolveRecaptchaSiteKey(context)

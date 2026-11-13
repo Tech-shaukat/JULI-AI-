@@ -22,6 +22,7 @@ import com.example.MainActivity
 import com.example.R
 import com.example.ai.JuliGeminiTextClient
 import com.example.ai.JuliToolExecutor
+import com.example.ai.configureAppCheck
 import com.example.data.local.JuliDatabase
 import com.example.data.repository.JuliRepository
 import com.example.intents.PendingAction
@@ -126,11 +127,12 @@ class WakeWordService : Service() {
             }
         )
     }
-    private val geminiTextClient by lazy { JuliGeminiTextClient(toolExecutor) }
+    private val geminiTextClient by lazy { JuliGeminiTextClient(applicationContext, toolExecutor) }
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "WakeWordService onCreate")
+        configureAppCheck(applicationContext, null)
         val db = JuliDatabase.getDatabase(this)
         repository = JuliRepository(db.noteDao(), db.chatDao(), db.taskDao(), db.memoryDao())
 

@@ -149,7 +149,7 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private val geminiTextClient by lazy { JuliGeminiTextClient(toolExecutor) }
+    private val geminiTextClient by lazy { JuliGeminiTextClient(getApplication(), toolExecutor) }
 
     val liveUiState: StateFlow<LiveUiState>
         get() = liveManager.state
@@ -158,7 +158,7 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
     private var ttsManager: JuliTtsManager? = null
 
     init {
-        liveManager = JuliLiveManager(repository, toolExecutor)
+        liveManager = JuliLiveManager(application, repository, toolExecutor)
         initSpeechAndTts(application)
         observeWakeWordEvents()
         observeLiveSessionState()

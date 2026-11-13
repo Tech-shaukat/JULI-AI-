@@ -1,5 +1,6 @@
 package com.example.ai
 
+import android.content.Context
 import android.util.Log
 import com.example.data.model.ChatMessage
 import com.google.firebase.Firebase
@@ -18,6 +19,7 @@ data class GeminiTextReply(
 )
 
 class JuliGeminiTextClient(
+    private val context: Context,
     private val toolExecutor: JuliToolExecutor
 ) {
     companion object {
@@ -39,6 +41,11 @@ class JuliGeminiTextClient(
         recentMessages: List<ChatMessage> = emptyList()
     ): GeminiTextReply {
         return try {
+            if (!ensureFirebaseInitialized(context)) {
+                throw IllegalStateException(
+                    "Firebase config (google-services.json) इस APK में मौजूद नहीं है। कृपया GitHub repo में app/google-services.json जोड़कर APK फिर से बिल्ड करें।"
+                )
+            }
             withTimeout(60_000L) {
                 val model = buildModel(languageCode)
                 val history: List<Content> = recentMessages
