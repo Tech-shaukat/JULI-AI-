@@ -58,7 +58,6 @@ jobs:
           fi
 
       - name: Set up Gradle 9.3.1
-        id: setup-gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
@@ -68,13 +67,12 @@ jobs:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: android
           KEY_PASSWORD: android
-          GRADLE_EXE: ${{ steps.setup-gradle.outputs.gradle-executable }}
-        run: '"${GRADLE_EXE:-gradle}" :app:assembleRelease --no-daemon --stacktrace'
+        run: |
+          gradle --version
+          gradle :app:assembleRelease --no-daemon --stacktrace
 
       - name: Build Debug APK
-        env:
-          GRADLE_EXE: ${{ steps.setup-gradle.outputs.gradle-executable }}
-        run: '"${GRADLE_EXE:-gradle}" :app:assembleDebug --no-daemon --stacktrace'
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Upload JULI AI Release APK
         uses: actions/upload-artifact@v4
