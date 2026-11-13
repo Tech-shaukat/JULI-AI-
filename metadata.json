@@ -1,0 +1,6 @@
+{
+  "name": "JULI AI",
+  "description": "Futuristic voice and text AI assistant with Hindi & English speech recognition, natural female Hindi TTS voice, smart voice actions, local notes, and glowing assistant orb.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
