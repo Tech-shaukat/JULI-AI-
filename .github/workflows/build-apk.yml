@@ -18,11 +18,19 @@ jobs:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            if printf '%s' "$GOOGLE_SERVICES_JSON" | grep -q '"project_info"'; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d > app/google-services.json
+            fi
             echo "Restored app/google-services.json from GitHub Secret."
           fi
           if [ ! -f app/google-services.json ]; then
-            echo "::error::Missing app/google-services.json! Push app/google-services.json to GitHub or add it as a repository secret named GOOGLE_SERVICES_JSON."
+            echo "::error::Missing app/google-services.json! Push app/google-services.json (package com.safalta.julia) to GitHub or add its content as a repository secret named GOOGLE_SERVICES_JSON."
+            exit 1
+          fi
+          if ! grep -q '"com.safalta.julia"' app/google-services.json; then
+            echo "::error::app/google-services.json does not contain package_name com.safalta.julia! Please use the google-services.json from this AI Studio project."
             exit 1
           fi
 
@@ -50,6 +58,7 @@ jobs:
           fi
 
       - name: Set up Gradle 9.3.1
+        id: setup-gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
@@ -59,10 +68,13 @@ jobs:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: android
           KEY_PASSWORD: android
-        run: gradle :app:assembleRelease --no-daemon
+          GRADLE_EXE: ${{ steps.setup-gradle.outputs.gradle-executable }}
+        run: '"${GRADLE_EXE:-gradle}" :app:assembleRelease --no-daemon --stacktrace'
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        env:
+          GRADLE_EXE: ${{ steps.setup-gradle.outputs.gradle-executable }}
+        run: '"${GRADLE_EXE:-gradle}" :app:assembleDebug --no-daemon --stacktrace'
 
       - name: Upload JULI AI Release APK
         uses: actions/upload-artifact@v4
