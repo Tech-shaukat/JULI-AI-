@@ -5,11 +5,14 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ai.AppCheckDiagnostics
+import com.example.ai.AppCheckStatus
 import com.example.ai.JuliGeminiTextClient
 import com.example.ai.JuliLiveManager
 import com.example.ai.JuliToolExecutor
 import com.example.ai.LivePhase
 import com.example.ai.LiveUiState
+import com.example.ai.refreshAppCheckToken
 import com.example.data.local.JuliDatabase
 import com.example.data.model.ChatMessage
 import com.example.data.model.Note
@@ -23,6 +26,7 @@ import com.example.ai.JuliVideoStudioClient
 import com.example.brain.BrainAction
 import com.example.brain.JuliBrain
 import com.example.intents.ContactResolver
+import com.example.intents.InstalledAppInfo
 import com.example.intents.JuliAssistantPrefs
 import com.example.intents.MobileActionDispatcher
 import com.example.intents.PendingAction
@@ -188,6 +192,11 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
     val isNotificationAccessEnabled: StateFlow<Boolean> = _isNotificationAccessEnabled.asStateFlow()
 
     val capturedNotifications: StateFlow<List<CapturedNotification>> = NotificationCenterStore.notifications
+
+    val appCheckStatus: StateFlow<AppCheckStatus> = AppCheckDiagnostics.status
+
+    private val _installedApps = MutableStateFlow(MobileActionDispatcher.getInstalledApps(application))
+    val installedApps: StateFlow<List<InstalledAppInfo>> = _installedApps.asStateFlow()
 
     private val _imageStudioState = MutableStateFlow<ImageStudioUiState>(ImageStudioUiState.Idle)
     val imageStudioState: StateFlow<ImageStudioUiState> = _imageStudioState.asStateFlow()
@@ -421,6 +430,39 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
         _hasContactsPermission.value = ContactResolver.hasReadContactsPermission(ctx)
         _hasCallPhonePermission.value = ContactResolver.hasCallPhonePermission(ctx)
         _isNotificationAccessEnabled.value = NotificationCenterStore.isNotificationAccessEnabled(ctx)
+        _installedApps.value = MobileActionDispatcher.getInstalledApps(ctx)
+    }
+
+    fun openInstalledApp(context: Context, queryOrName: String) {
+        val clean = queryOrName.trim()
+        if (clean.isEmpty()) return
+        val result = MobileActionDispatcher.openAppByName(context, clean)
+        if (result.launched) {
+            val matched = result.matchedAppName ?: clean
+            _lastActionBadge.value = "App: $matched"
+            speakText("$matched खोल रही हूँ।", isHindi = true)
+        } else {
+            val hint = if (result.suggestions.isNotEmpty()) {
+                " मिलते-जुलते ऐप: ${result.suggestions.joinToString(", ")}"
+            } else {
+                ""
+            }
+            _errorMessage.value = "'$clean' ऐप इस मोबाइल में नहीं मिला।$hint"
+        }
+    }
+
+    fun launchInstalledApp(context: Context, app: InstalledAppInfo) {
+        val launched = com.example.intents.InstalledAppLauncher.launchApp(context, app)
+        if (launched) {
+            _lastActionBadge.value = "App: ${app.appName}"
+            speakText("${app.appName} खोल रही हूँ।", isHindi = true)
+        } else {
+            _errorMessage.value = "${app.appName} खोला नहीं जा सका।"
+        }
+    }
+
+    fun refreshAppCheckStatus() {
+        refreshAppCheckToken(forceRefresh = true)
     }
 
     fun setDirectCallEnabled(enabled: Boolean) {
@@ -1121,6 +1163,31 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                     else -> NavigationTab.ASSISTANT
                 }
                 finishLocalFallback(action.speakResponse, action.isHindi, "Navigation")
+                true
+            }
+            is BrainAction.OpenApp -> {
+                val result = MobileActionDispatcher.openAppByName(context, action.appName)
+                if (result.launched) {
+                    val matched = result.matchedAppName ?: action.appName
+                    val spoken = if (action.isHindi) "$matched खोल रही हूँ।" else "Opening $matched."
+                    finishLocalFallback(spoken, action.isHindi, "App: $matched")
+                } else {
+                    val suggestionText = if (result.suggestions.isNotEmpty()) {
+                        if (action.isHindi) {
+                            " क्या आपका मतलब ${result.suggestions.take(3).joinToString(", ")} से था?"
+                        } else {
+                            " Did you mean: ${result.suggestions.take(3).joinToString(", ")}?"
+                        }
+                    } else {
+                        ""
+                    }
+                    val notFoundMsg = if (action.isHindi) {
+                        "माफ़ कीजिए, '${action.appName}' ऐप इस मोबाइल में इंस्टॉल नहीं मिला।$suggestionText"
+                    } else {
+                        "Sorry, I couldn't find '${action.appName}' installed on this phone.$suggestionText"
+                    }
+                    finishLocalFallback(notFoundMsg, action.isHindi, "App Not Found")
+                }
                 true
             }
             is BrainAction.Speak -> {

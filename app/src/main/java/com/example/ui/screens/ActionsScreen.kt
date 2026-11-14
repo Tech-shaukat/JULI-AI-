@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BatteryChargingFull
@@ -66,6 +67,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Search
+import com.example.intents.InstalledAppInfo
 import com.example.service.CapturedNotification
 import com.example.ui.components.CreativeStudioPanel
 import com.example.ui.components.MapsPanel
@@ -107,6 +112,9 @@ fun ActionsScreen(
     onOpenChrome: () -> Unit,
     onOpenCamera: () -> Unit,
     onOpenSettings: (String) -> Unit,
+    installedApps: List<InstalledAppInfo>,
+    onOpenAppByName: (String) -> Unit,
+    onLaunchInstalledApp: (InstalledAppInfo) -> Unit,
     mapDestination: String,
     mapTravelMode: String,
     onMapDestinationChange: (String) -> Unit,
@@ -210,6 +218,14 @@ fun ActionsScreen(
                             onRequestCall = onRequestCall,
                             onRequestSms = onRequestSms,
                             onRequestWhatsApp = onRequestWhatsApp
+                        )
+                    }
+
+                    item {
+                        InstalledAppLauncherCard(
+                            installedApps = installedApps,
+                            onOpenAppByName = onOpenAppByName,
+                            onLaunchInstalledApp = onLaunchInstalledApp
                         )
                     }
 
@@ -551,6 +567,149 @@ private fun CommunicationShortcutsCard(
                 lineHeight = 15.sp,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun InstalledAppLauncherCard(
+    installedApps: List<InstalledAppInfo>,
+    onOpenAppByName: (String) -> Unit,
+    onLaunchInstalledApp: (InstalledAppInfo) -> Unit
+) {
+    var appQuery by remember { mutableStateOf("") }
+    val filteredApps = remember(appQuery, installedApps) {
+        val clean = appQuery.trim().lowercase()
+        if (clean.isEmpty()) {
+            installedApps.take(12)
+        } else {
+            installedApps.filter {
+                it.appName.lowercase().contains(clean) ||
+                    it.packageName.lowercase().contains(clean)
+            }.take(16)
+        }
+    }
+
+    Text(
+        text = "Open Any Installed App (${installedApps.size})",
+        color = CyberCyan,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+        border = BorderStroke(1.dp, SurfaceBorder),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "किसी भी ऐप का नाम बोलें (जैसे \"Instagram kholo\", \"Paytm चालू करो\") या नीचे खोजकर खोलें:",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = appQuery,
+                    onValueChange = { appQuery = it },
+                    placeholder = { Text("ऐप का नाम लिखें...", color = TextDim, fontSize = 12.sp) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search Installed App",
+                            tint = CyberCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CyberCyan,
+                        unfocusedBorderColor = SurfaceBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = SurfaceCardElevated,
+                        unfocusedContainerColor = SurfaceCardElevated
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("installed_app_search_input")
+                )
+
+                Button(
+                    onClick = { onOpenAppByName(appQuery) },
+                    enabled = appQuery.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberCyan,
+                        disabledContainerColor = SurfaceBorder
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("open_searched_app_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = "Open App",
+                        tint = DeepSpace,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Open", color = DeepSpace, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (filteredApps.isEmpty()) {
+                Text(
+                    text = "इस नाम का कोई इंस्टॉल ऐप नहीं मिला।",
+                    color = TextDim,
+                    fontSize = 11.sp
+                )
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(filteredApps, key = { it.packageName }) { app ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { onLaunchInstalledApp(app) },
+                            label = {
+                                Text(
+                                    text = app.appName,
+                                    fontSize = 12.sp,
+                                    color = TextPrimary,
+                                    maxLines = 1
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Apps,
+                                    contentDescription = "Launch ${app.appName}",
+                                    tint = CyberCyan,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = SurfaceCardElevated,
+                                labelColor = TextPrimary
+                            ),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("installed_app_chip_${app.packageName}")
+                        )
+                    }
+                }
+            }
         }
     }
 }

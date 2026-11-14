@@ -114,8 +114,8 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `test Gemini Live declarations expose all 16 task tools and female voices`() {
-        assertEquals(16, JuliTools.functionDeclarations.size)
+    fun `test Gemini Live declarations expose all 18 task tools and female voices`() {
+        assertEquals(18, JuliTools.functionDeclarations.size)
         assertTrue(JuliLiveManager.femaleVoices.any { it.id == "Sulafat" })
         assertTrue(JuliLiveManager.femaleVoices.any { it.id == "Aoede" })
     }

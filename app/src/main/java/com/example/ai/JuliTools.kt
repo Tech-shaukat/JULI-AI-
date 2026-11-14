@@ -54,7 +54,10 @@ object JuliTools {
 
                 Core behavior:
                 - Speak naturally, concisely, and warmly—ideal for real-time voice conversation. Avoid markdown formatting, bullet lists, or long essays unless asked.
-                - Whenever the user asks to perform an action on the phone (open YouTube, search Google/Chrome, open Camera, open WiFi/Bluetooth/Display/Sound settings, set Google Maps navigation, read incoming messages/notifications, search contacts, save a note, add a task, remember personal info, check their notes/tasks, switch app tabs, make a phone call, send an SMS, or send a WhatsApp message), IMMEDIATELY invoke the corresponding tool function and then briefly confirm what you did.
+                - Whenever the user asks to perform an action on the phone (open ANY installed app like WhatsApp/Instagram/Paytm/PhonePe/Spotify/Telegram/Calculator/Gallery/Play Store/etc., open YouTube, search Google/Chrome, open Camera, open WiFi/Bluetooth/Display/Sound settings, set Google Maps navigation, read incoming messages/notifications, search contacts, save a note, add a task, remember personal info, check their notes/tasks, switch app tabs, make a phone call, send an SMS, or send a WhatsApp message), IMMEDIATELY invoke the corresponding tool function and then briefly confirm what you did.
+                - Opening ANY Installed App:
+                  * Whenever the user asks to open or launch ANY app on their phone (e.g., "Instagram kholo", "Paytm chalu karo", "Open Spotify", "Play Store खोलो", "Gallery open karo"), IMMEDIATELY call open_app with app_name.
+                  * If open_app reports status='not_found', you may check list_installed_apps or clearly tell the user that the app was not found on this phone and mention any suggested close matches.
                 - Direct Calling & Contacts:
                   * If the user asks to call someone by name (e.g., "Rahul ko call karo", "Call Mom"), call search_contacts or make_phone_call with recipient_name. When CALL_PHONE & READ_CONTACTS permissions are granted and a unique number is found, JULI places the call directly; otherwise a confirmation dialog opens on screen.
                 - Google Maps Navigation:
@@ -217,6 +220,22 @@ object JuliTools {
                 "limit" to Schema.integer(description = "Maximum number of recent notifications to return (default 5).")
             ),
             optionalParameters = listOf("app_filter", "limit")
+        ),
+        FunctionDeclaration(
+            name = "open_app",
+            description = "Finds and opens ANY app installed on the user's phone by its spoken name (e.g. WhatsApp, Instagram, Paytm, PhonePe, Google Pay, Spotify, Telegram, Gallery, Calculator, Play Store, Games, etc.).",
+            parameters = mapOf(
+                "app_name" to Schema.string(description = "The spoken name of the app to open, in English or Hindi.")
+            ),
+            optionalParameters = emptyList()
+        ),
+        FunctionDeclaration(
+            name = "list_installed_apps",
+            description = "Lists launchable apps installed on the user's phone, optionally filtered by a search keyword.",
+            parameters = mapOf(
+                "filter" to Schema.string(description = "Optional keyword to filter installed app names.")
+            ),
+            optionalParameters = listOf("filter")
         )
     )
 
@@ -538,6 +557,37 @@ class JuliToolExecutor(
                             put("time", JsonPrimitive(timeFmt.format(Date(it.timestamp))))
                         }
                     }))
+                }
+            }
+
+            "open_app" -> {
+                val appName = args.stringArg("app_name").orEmpty()
+                val result = MobileActionDispatcher.openAppByName(context, appName)
+                if (result.launched) {
+                    val matched = result.matchedAppName ?: appName
+                    "Opened: $matched" to buildJsonObject {
+                        put("status", JsonPrimitive("opened"))
+                        put("requested_name", JsonPrimitive(appName))
+                        put("matched_app", JsonPrimitive(matched))
+                        put("package_name", JsonPrimitive(result.matchedPackageName ?: ""))
+                    }
+                } else {
+                    "App Not Found" to buildJsonObject {
+                        put("status", JsonPrimitive("not_found"))
+                        put("requested_name", JsonPrimitive(appName))
+                        put("suggestions", JsonArray(result.suggestions.map { JsonPrimitive(it) }))
+                    }
+                }
+            }
+
+            "list_installed_apps" -> {
+                val filter = args.stringArg("filter")?.lowercase(Locale.ROOT).orEmpty()
+                val apps = MobileActionDispatcher.getInstalledApps(context)
+                    .filter { filter.isEmpty() || it.appName.lowercase(Locale.ROOT).contains(filter) }
+                    .take(40)
+                "Installed Apps (${apps.size})" to buildJsonObject {
+                    put("count", JsonPrimitive(apps.size))
+                    put("apps", JsonArray(apps.map { JsonPrimitive(it.appName) }))
                 }
             }
 

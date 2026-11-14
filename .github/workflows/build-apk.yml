@@ -33,6 +33,10 @@ jobs:
             echo "::error::app/google-services.json does not contain package_name com.safalta.julia! Please use the google-services.json from this AI Studio project."
             exit 1
           fi
+          if [ ! -f app/src/main/res/values/firebase_applet_config.xml ] || ! grep -q 'recaptcha_site_key' app/src/main/res/values/firebase_applet_config.xml; then
+            echo "::error::Missing app/src/main/res/values/firebase_applet_config.xml with recaptcha_site_key! Push this file from AI Studio so Firebase App Check works in the APK."
+            exit 1
+          fi
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4

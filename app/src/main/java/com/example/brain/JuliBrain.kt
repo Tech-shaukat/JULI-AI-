@@ -95,6 +95,10 @@ class JuliBrain {
         val sectionMatch = matchSectionCommand(lower, isHindi)
         if (sectionMatch != null) return sectionMatch
 
+        // 9.5. Open any installed app by name (e.g., "Instagram kholo", "Open Paytm", "WhatsApp चालू करो")
+        val appMatch = matchOpenAppCommand(query, lower, isHindi, isBhojpuri)
+        if (appMatch != null) return appMatch
+
         // 10. User Memory: "Remember that...", "Mera naam...", "Yaad rakho..."
         val memoryMatch = matchMemoryCommand(query, lower, isHindi)
         if (memoryMatch != null) return memoryMatch
@@ -215,7 +219,7 @@ class JuliBrain {
     }
 
     private fun matchYouTubeCommand(raw: String, lower: String, isHindi: Boolean, isBhojpuri: Boolean): BrainAction? {
-        val isYt = lower.contains("youtube") || lower.contains("yt") ||
+        val isYt = lower.contains("youtube") || Regex("\\byt\\b").containsMatchIn(lower) ||
                 lower.contains("gana chalao") || lower.contains("video chalao") ||
                 lower.contains("gana bajao") || lower.contains("play song") ||
                 lower.contains("gana bajawa")
@@ -502,6 +506,39 @@ class JuliBrain {
             }
             else -> null
         }
+    }
+
+    private fun matchOpenAppCommand(
+        raw: String,
+        lower: String,
+        isHindi: Boolean,
+        isBhojpuri: Boolean
+    ): BrainAction? {
+        val openTriggers = listOf(
+            "open ", "launch ", "start ",
+            " kholo", " khol do", " khol", " chalao", " chalu karo", " chalu", " open karo",
+            " खोलो", " खोल दो", " चालू करो", " चलाओ", " ओपन करो"
+        )
+        val hasTrigger = openTriggers.any { lower.contains(it) } ||
+            lower.endsWith("kholo") || lower.endsWith("खोलो") ||
+            lower.endsWith("chalao") || lower.endsWith("चलाओ")
+        if (!hasTrigger) return null
+
+        val target = com.example.intents.InstalledAppLauncher.extractAppTarget(raw)
+        if (target.isBlank()) return null
+
+        // Ignore internal app sections if already handled or ambiguous
+        val ignoredTargets = setOf("note", "notes", "task", "tasks", "memory", "notification", "notifications")
+        if (target.lowercase(Locale.ROOT) in ignoredTargets) return null
+
+        val speak = if (isBhojpuri) {
+            "$target खोलल जा रहल बा।"
+        } else if (isHindi) {
+            "$target खोला जा रहा है।"
+        } else {
+            "Opening $target."
+        }
+        return BrainAction.OpenApp(appName = target, speakResponse = speak, isHindi = isHindi)
     }
 
     private fun matchMemoryCommand(raw: String, lower: String, isHindi: Boolean): BrainAction? {

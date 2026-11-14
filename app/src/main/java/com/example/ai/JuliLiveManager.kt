@@ -171,9 +171,16 @@ class JuliLiveManager(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start Gemini Live session", e)
             cleanupSession()
+            val raw = e.localizedMessage ?: "Failed to connect to Gemini Live."
+            val enriched = if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                val diag = AppCheckDiagnostics.status.value
+                "$raw [${diag.providerName}: ${diag.diagnosticMessage}]"
+            } else {
+                raw
+            }
             _state.value = _state.value.copy(
                 phase = LivePhase.ERROR,
-                errorMessage = e.localizedMessage ?: "Failed to connect to Gemini Live."
+                errorMessage = enriched
             )
         }
     }

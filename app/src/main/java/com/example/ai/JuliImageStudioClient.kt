@@ -71,6 +71,11 @@ class JuliImageStudioClient(private val context: Context) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Image generation failed", e)
+            val raw = e.localizedMessage ?: "Image generation failed."
+            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                val diag = AppCheckDiagnostics.status.value
+                throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
+            }
             throw e
         }
     }
@@ -111,6 +116,11 @@ class JuliImageStudioClient(private val context: Context) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Image editing failed", e)
+            val raw = e.localizedMessage ?: "Image editing failed."
+            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                val diag = AppCheckDiagnostics.status.value
+                throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
+            }
             throw e
         }
     }

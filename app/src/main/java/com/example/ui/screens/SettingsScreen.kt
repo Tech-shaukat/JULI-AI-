@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
@@ -57,6 +59,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ai.AppCheckStatus
 import com.example.data.model.UserMemory
 import com.example.ui.theme.CosmicMagenta
 import com.example.ui.theme.CyberCyan
@@ -88,6 +91,7 @@ fun SettingsScreen(
     isNotificationAccessEnabled: Boolean,
     autoAnnounceNotifs: Boolean,
     readNotifContent: Boolean,
+    appCheckStatus: AppCheckStatus,
     memories: List<UserMemory>,
     onLanguageChange: (String) -> Unit,
     onSelectLiveVoice: (String) -> Unit,
@@ -98,6 +102,7 @@ fun SettingsScreen(
     onToggleAutoAnnounceNotifs: (Boolean) -> Unit,
     onToggleReadNotifContent: (Boolean) -> Unit,
     onOpenNotificationSettings: () -> Unit,
+    onRefreshAppCheck: () -> Unit,
     onDeleteMemory: (String) -> Unit,
     onRequestClearAllData: () -> Unit,
     modifier: Modifier = Modifier
@@ -615,6 +620,89 @@ fun SettingsScreen(
                         Icon(imageVector = Icons.Default.DeleteSweep, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Clear All Stored Data", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // Section: Firebase App Check Diagnostics (Read-Only)
+        item {
+            val statusColor = if (appCheckStatus.tokenReady) StateSuccess else StateError
+            Card(
+                colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = "Firebase App Check Status",
+                                tint = statusColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Firebase App Check Status",
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary,
+                                fontSize = 14.sp
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = statusColor.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = if (appCheckStatus.tokenReady) "VALID" else "NEEDS CHECK",
+                                color = statusColor,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Provider: ${appCheckStatus.providerName}",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "reCAPTCHA Site Key: ${if (appCheckStatus.hasSiteKey) "Configured" else "Missing in APK"}",
+                        color = if (appCheckStatus.hasSiteKey) StateSuccess else StateError,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = appCheckStatus.diagnosticMessage,
+                        color = TextDim,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+
+                    OutlinedButton(
+                        onClick = onRefreshAppCheck,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("refresh_app_check_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh App Check Token",
+                            tint = CyberCyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Refresh Token", color = CyberCyan, fontSize = 12.sp)
                     }
                 }
             }

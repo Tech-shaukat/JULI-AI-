@@ -99,6 +99,14 @@ class JuliGeminiTextClient(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Gemini text inference failed", e)
+            val raw = e.localizedMessage ?: "Gemini AI connection failed."
+            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                val diag = AppCheckDiagnostics.status.value
+                throw IllegalStateException(
+                    "$raw [${diag.providerName}: ${diag.diagnosticMessage}]",
+                    e
+                )
+            }
             throw e
         }
     }

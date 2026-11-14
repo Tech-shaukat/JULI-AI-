@@ -92,5 +92,11 @@ sealed class BrainAction {
         val isHindi: Boolean = true
     ) : BrainAction()
 
+    data class OpenApp(
+        val appName: String,
+        val speakResponse: String,
+        val isHindi: Boolean = true
+    ) : BrainAction()
+
     object StopSpeaking : BrainAction()
 }

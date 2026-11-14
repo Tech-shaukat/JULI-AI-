@@ -168,6 +168,8 @@ fun JuliMainApp(viewModel: JuliViewModel) {
     val capturedNotifications by viewModel.capturedNotifications.collectAsState()
     val imageStudioState by viewModel.imageStudioState.collectAsState()
     val videoStudioState by viewModel.videoStudioState.collectAsState()
+    val appCheckStatus by viewModel.appCheckStatus.collectAsState()
+    val installedApps by viewModel.installedApps.collectAsState()
 
     var showMicRationale by remember { mutableStateOf(false) }
     var pendingMicPurpose by remember { mutableStateOf<String?>(null) }
@@ -630,6 +632,9 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         onOpenChrome = { MobileActionDispatcher.openChrome(context) },
                         onOpenCamera = { MobileActionDispatcher.openCamera(context) },
                         onOpenSettings = { type -> MobileActionDispatcher.openSettings(context, type) },
+                        installedApps = installedApps,
+                        onOpenAppByName = { query -> viewModel.openInstalledApp(context, query) },
+                        onLaunchInstalledApp = { app -> viewModel.launchInstalledApp(context, app) },
                         mapDestination = mapDestination,
                         mapTravelMode = mapTravelMode,
                         onMapDestinationChange = { dest -> viewModel.setMapDestination(dest, mapTravelMode) },
@@ -669,6 +674,7 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         isNotificationAccessEnabled = isNotificationAccessEnabled,
                         autoAnnounceNotifs = autoAnnounceNotifs,
                         readNotifContent = readNotifContent,
+                        appCheckStatus = appCheckStatus,
                         memories = memories,
                         onLanguageChange = { viewModel.setLanguage(it) },
                         onSelectLiveVoice = { viewModel.setLiveVoice(it) },
@@ -696,6 +702,7 @@ fun JuliMainApp(viewModel: JuliViewModel) {
                         onToggleAutoAnnounceNotifs = { viewModel.setAutoAnnounceNotifications(it) },
                         onToggleReadNotifContent = { viewModel.setReadNotificationContent(it) },
                         onOpenNotificationSettings = { MobileActionDispatcher.openNotificationListenerSettings(context) },
+                        onRefreshAppCheck = { viewModel.refreshAppCheckStatus() },
                         onDeleteMemory = { key -> viewModel.deleteMemory(key) },
                         onRequestClearAllData = { viewModel.clearAllData() }
                     )

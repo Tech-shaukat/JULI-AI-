@@ -355,6 +355,14 @@ object MobileActionDispatcher {
         }
     }
 
+    fun openAppByName(context: Context, appQuery: String): AppLaunchResult {
+        return InstalledAppLauncher.openAppByName(context, appQuery)
+    }
+
+    fun getInstalledApps(context: Context): List<InstalledAppInfo> {
+        return InstalledAppLauncher.getInstalledApps(context)
+    }
+
     fun openWebUrl(context: Context, url: String): Boolean {
         return try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
