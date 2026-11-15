@@ -54,30 +54,50 @@ class JuliImageStudioClient(private val context: Context) {
             "$cleanPrompt (aspect ratio: $aspectRatio)"
         }
 
-        try {
-            withTimeout(60_000L) {
-                val response = buildModel().generateContent(augmentedPrompt)
-                val bitmap = response.candidates.firstOrNull()
-                    ?.content?.parts?.filterIsInstance<ImagePart>()
-                    ?.firstOrNull()?.image
-                    ?: throw IllegalStateException("मॉडल ने कोई इमेज नहीं भेजी। कृपया दूसरा प्रॉम्प्ट आज़माएँ।")
-                val file = saveBitmapToCache(bitmap, "juli_img")
-                bitmap to file
+        var lastError: Exception? = null
+        for (attempt in 0..1) {
+            try {
+                return@withContext withTimeout(60_000L) {
+                    val response = buildModel().generateContent(augmentedPrompt)
+                    val bitmap = response.candidates.firstOrNull()
+                        ?.content?.parts?.filterIsInstance<ImagePart>()
+                        ?.firstOrNull()?.image
+                        ?: throw IllegalStateException("मॉडल ने कोई इमेज नहीं भेजी। कृपया दूसरा प्रॉम्प्ट आज़माएँ।")
+                    val file = saveBitmapToCache(bitmap, "juli_img")
+                    bitmap to file
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Image generation timed out", e)
+                throw IllegalStateException("Image generation timed out after 60 seconds. Please retry.")
+            } catch (e: CancellationException) {
+                if (isChannelClosedError(e) && attempt == 0) {
+                    kotlinx.coroutines.delay(250)
+                    lastError = IllegalStateException(e)
+                    continue
+                }
+                if (isChannelClosedError(e)) {
+                    throw IllegalStateException("नेटवर्क कनेक्शन बीच में बंद हो गया (Channel closed)। कृपया दोबारा कोशिश करें।", e)
+                }
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Image generation failed", e)
+                lastError = e
+                if (isChannelClosedError(e) && attempt == 0) {
+                    kotlinx.coroutines.delay(250)
+                    continue
+                }
+                val raw = e.localizedMessage ?: "Image generation failed."
+                if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                    val diag = AppCheckDiagnostics.status.value
+                    throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
+                }
+                if (isChannelClosedError(e)) {
+                    throw IllegalStateException("नेटवर्क कनेक्शन बीच में बंद हो गया (Channel closed)। कृपया दोबारा कोशिश करें।", e)
+                }
+                throw e
             }
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Image generation timed out", e)
-            throw IllegalStateException("Image generation timed out after 60 seconds. Please retry.")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Image generation failed", e)
-            val raw = e.localizedMessage ?: "Image generation failed."
-            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
-                val diag = AppCheckDiagnostics.status.value
-                throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
-            }
-            throw e
         }
+        throw (lastError ?: IllegalStateException("Image generation failed."))
     }
 
     suspend fun editImage(
@@ -94,35 +114,59 @@ class JuliImageStudioClient(private val context: Context) {
             throw IllegalArgumentException("कृपया बताएं कि फोटो में क्या बदलाव करना है।")
         }
 
-        try {
-            withTimeout(60_000L) {
-                val response = buildModel().generateContent(
-                    content {
-                        image(inputBitmap)
-                        text(cleanInstruction)
-                    }
-                )
-                val bitmap = response.candidates.firstOrNull()
-                    ?.content?.parts?.filterIsInstance<ImagePart>()
-                    ?.firstOrNull()?.image
-                    ?: throw IllegalStateException("मॉडल से एडिटेड इमेज प्राप्त नहीं हुई।")
-                val file = saveBitmapToCache(bitmap, "juli_edit")
-                bitmap to file
+        var lastError: Exception? = null
+        for (attempt in 0..1) {
+            try {
+                return@withContext withTimeout(60_000L) {
+                    val response = buildModel().generateContent(
+                        content {
+                            image(inputBitmap)
+                            text(cleanInstruction)
+                        }
+                    )
+                    val bitmap = response.candidates.firstOrNull()
+                        ?.content?.parts?.filterIsInstance<ImagePart>()
+                        ?.firstOrNull()?.image
+                        ?: throw IllegalStateException("मॉडल से एडिटेड इमेज प्राप्त नहीं हुई।")
+                    val file = saveBitmapToCache(bitmap, "juli_edit")
+                    bitmap to file
+                }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Image editing timed out", e)
+                throw IllegalStateException("Image editing timed out after 60 seconds. Please retry.")
+            } catch (e: CancellationException) {
+                if (isChannelClosedError(e) && attempt == 0) {
+                    kotlinx.coroutines.delay(250)
+                    lastError = IllegalStateException(e)
+                    continue
+                }
+                if (isChannelClosedError(e)) {
+                    throw IllegalStateException("नेटवर्क कनेक्शन बीच में बंद हो गया (Channel closed)। कृपया दोबारा कोशिश करें।", e)
+                }
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Image editing failed", e)
+                lastError = e
+                if (isChannelClosedError(e) && attempt == 0) {
+                    kotlinx.coroutines.delay(250)
+                    continue
+                }
+                val raw = e.localizedMessage ?: "Image editing failed."
+                if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
+                    val diag = AppCheckDiagnostics.status.value
+                    throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
+                }
+                if (isChannelClosedError(e)) {
+                    throw IllegalStateException("नेटवर्क कनेक्शन बीच में बंद हो गया (Channel closed)। कृपया दोबारा कोशिश करें।", e)
+                }
+                throw e
             }
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Image editing timed out", e)
-            throw IllegalStateException("Image editing timed out after 60 seconds. Please retry.")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Image editing failed", e)
-            val raw = e.localizedMessage ?: "Image editing failed."
-            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
-                val diag = AppCheckDiagnostics.status.value
-                throw IllegalStateException("$raw [${diag.providerName}: ${diag.diagnosticMessage}]", e)
-            }
-            throw e
         }
+        throw (lastError ?: IllegalStateException("Image editing failed."))
+    }
+
+    private fun isChannelClosedError(t: Throwable?): Boolean {
+        return JuliLiveManager.isChannelClosedThrowable(t)
     }
 
     private fun saveBitmapToCache(bitmap: Bitmap, prefix: String): File {

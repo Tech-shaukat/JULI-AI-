@@ -46,7 +46,7 @@ object JuliTools {
             else -> "Prefer natural, sweet conversational Hindi (Devanagari script) mixed gently with everyday words where natural, or match the user's language if they speak English or Bhojpuri."
         }
 
-        return content {
+        return content(role = "system") {
             text(
                 """
                 You are JULI AI (जूलिया), a warm, intelligent, polite female personal voice assistant on an Android 15 phone.
@@ -92,8 +92,10 @@ object JuliTools {
         FunctionDeclaration(
             name = "open_camera",
             description = "Launches the device Camera app so the user can take a photo.",
-            parameters = emptyMap(),
-            optionalParameters = emptyList()
+            parameters = mapOf(
+                "mode" to Schema.string(description = "Optional camera mode such as 'photo' or 'video'.")
+            ),
+            optionalParameters = listOf("mode")
         ),
         FunctionDeclaration(
             name = "open_settings",
@@ -168,8 +170,10 @@ object JuliTools {
         FunctionDeclaration(
             name = "get_user_context",
             description = "Reads the user's currently saved notes, pending tasks, and remembered facts from local storage.",
-            parameters = emptyMap(),
-            optionalParameters = emptyList()
+            parameters = mapOf(
+                "section" to Schema.string(description = "Optional filter such as 'all', 'notes', 'tasks', or 'memories'.")
+            ),
+            optionalParameters = listOf("section")
         ),
         FunctionDeclaration(
             name = "navigate_tab",
@@ -185,8 +189,10 @@ object JuliTools {
         FunctionDeclaration(
             name = "get_current_datetime",
             description = "Gets the current local date and time on the user's phone.",
-            parameters = emptyMap(),
-            optionalParameters = emptyList()
+            parameters = mapOf(
+                "format" to Schema.string(description = "Optional display format such as 'short' or 'full'.")
+            ),
+            optionalParameters = listOf("format")
         ),
         FunctionDeclaration(
             name = "search_contacts",

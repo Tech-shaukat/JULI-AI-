@@ -805,9 +805,19 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (isWakeWordActive.value) {
                     WakeWordService.pause(getApplication())
-                    delay(250)
+                    delay(450)
                 }
-                liveManager.startSession(_language.value)
+                try {
+                    liveManager.startSession(_language.value)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Unexpected error starting Gemini Live", e)
+                    val friendly = JuliLiveManager.formatLiveErrorMessage(e)
+                    _assistantState.value = OrbState.ERROR
+                    _statusText.value = friendly
+                    _bannerError.value = friendly
+                }
             }
         }
     }
@@ -1007,10 +1017,11 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            // If Gemini Live audio session is active, send right into the live WebSocket session
+            // If Gemini Live audio session is active, send right into the live WebSocket session.
+            // If the live channel silently closed, fall through cleanly to standard text AI.
             if (liveManager.state.value.isConnected) {
-                liveManager.sendTextTurn(trimmed)
-                return@launch
+                val sent = liveManager.sendTextTurn(trimmed)
+                if (sent) return@launch
             }
 
             val historySnapshot = chatMessages.value
@@ -1274,6 +1285,9 @@ class JuliViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        if (::liveManager.isInitialized) {
+            liveManager.shutdown()
+        }
         speechManager?.destroy()
         ttsManager?.shutdown()
     }

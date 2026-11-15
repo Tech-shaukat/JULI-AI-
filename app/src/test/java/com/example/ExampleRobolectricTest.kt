@@ -313,4 +313,18 @@ class ExampleRobolectricTest {
         assertEquals("Bank", smsOnly.first().sender)
         NotificationCenterStore.clearAll()
     }
+
+    @Test
+    fun `test JuliLiveManager detects and formats server channel closure including suppressed exceptions`() {
+        val directServerClose = IllegalStateException("Channel was closed by the server")
+        assertTrue(JuliLiveManager.isChannelClosedThrowable(directServerClose))
+        val formatted = JuliLiveManager.formatLiveErrorMessage(directServerClose)
+        assertTrue(formatted.contains("Channel closed"))
+
+        val suppressedWrapper = RuntimeException("Audio loop aborted").apply {
+            addSuppressed(IllegalStateException("WebSocket closed by the server"))
+        }
+        assertTrue(JuliLiveManager.isChannelClosedThrowable(suppressedWrapper))
+        assertFalse(JuliLiveManager.isChannelClosedThrowable(IllegalArgumentException("Invalid audio rate")))
+    }
 }
