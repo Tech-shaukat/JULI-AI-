@@ -227,7 +227,7 @@ fun AssistantScreen(
                             color = TextPrimary,
                             fontSize = 11.sp,
                             lineHeight = 15.sp,
-                            maxLines = 3,
+                            maxLines = 6,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )

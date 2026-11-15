@@ -327,4 +327,32 @@ class ExampleRobolectricTest {
         assertTrue(JuliLiveManager.isChannelClosedThrowable(suppressedWrapper))
         assertFalse(JuliLiveManager.isChannelClosedThrowable(IllegalArgumentException("Invalid audio rate")))
     }
+
+    @Test
+    fun `test JuliLiveManager formats exact WebSocket close diagnostics cleanly`() {
+        val channelClosed = IllegalStateException("Channel was closed by the server")
+
+        val appCheckDiag = com.example.ai.LiveServerCloseDiagnostics(
+            closeCode = 1008,
+            closeReason = "Firebase App Check token is invalid"
+        )
+        val appCheckMsg = JuliLiveManager.formatLiveErrorMessage(channelClosed, appCheckDiag)
+        assertTrue(appCheckMsg.contains("App Check"))
+        assertTrue(appCheckMsg.contains("WS 1008"))
+
+        val quotaDiag = com.example.ai.LiveServerCloseDiagnostics(
+            httpCode = 429,
+            serverMessage = "RESOURCE_EXHAUSTED: Live quota exceeded"
+        )
+        val quotaMsg = JuliLiveManager.formatLiveErrorMessage(channelClosed, quotaDiag)
+        assertTrue(quotaMsg.contains("HTTP 429"))
+        assertTrue(quotaMsg.contains("RESOURCE_EXHAUSTED"))
+
+        val genericCloseDiag = com.example.ai.LiveServerCloseDiagnostics(
+            closeCode = 1007,
+            closeReason = "Invalid setup payload"
+        )
+        val genericMsg = JuliLiveManager.formatLiveErrorMessage(channelClosed, genericCloseDiag)
+        assertTrue(genericMsg.contains("WS 1007: Invalid setup payload"))
+    }
 }

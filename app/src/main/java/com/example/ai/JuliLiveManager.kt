@@ -3,10 +3,12 @@ package com.example.ai
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.data.repository.JuliRepository
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.LiveGenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.AudioTranscriptionConfig
@@ -20,6 +22,7 @@ import com.google.firebase.ai.type.Transcription
 import com.google.firebase.ai.type.Voice
 import com.google.firebase.ai.type.liveAudioConversationConfig
 import com.google.firebase.ai.type.liveGenerationConfig
+import com.google.firebase.appcheck.FirebaseAppCheck
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -36,9 +39,21 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 enum class LivePhase {
     DISCONNECTED,
@@ -67,6 +82,34 @@ data class LiveUiState(
         get() = phase == LivePhase.LISTENING || phase == LivePhase.THINKING || phase == LivePhase.SPEAKING
 }
 
+internal data class LiveServerCloseDiagnostics(
+    val httpCode: Int? = null,
+    val closeCode: Int? = null,
+    val closeReason: String? = null,
+    val serverMessage: String? = null,
+    val appCheckIssue: String? = null,
+    val networkError: String? = null
+) {
+    fun compactSummary(): String {
+        val parts = mutableListOf<String>()
+        if (httpCode != null) parts.add("HTTP $httpCode")
+        if (closeCode != null) parts.add("WS $closeCode")
+        val detailText = closeReason?.takeIf { it.isNotBlank() }
+            ?: serverMessage?.takeIf { it.isNotBlank() }
+            ?: appCheckIssue?.takeIf { it.isNotBlank() }
+            ?: networkError?.takeIf { it.isNotBlank() }
+        if (detailText != null) parts.add(detailText.take(160))
+        return parts.joinToString(": ")
+    }
+
+    fun combinedSearchText(): String = listOfNotNull(
+        closeReason,
+        serverMessage,
+        appCheckIssue,
+        networkError
+    ).joinToString(" ")
+}
+
 @OptIn(PublicPreviewAPI::class)
 class JuliLiveManager(
     private val context: Context,
@@ -77,13 +120,15 @@ class JuliLiveManager(
         val modelName: String,
         val includeTools: Boolean,
         val includeTranscription: Boolean,
-        val includeSpeechConfig: Boolean
+        val includeSpeechConfig: Boolean,
+        val includeSystemInstruction: Boolean = true
     )
 
     companion object {
         private const val TAG = "JuliLiveManager"
         private const val PRIMARY_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
         private const val SECONDARY_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+        private const val TERTIARY_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-09-2025"
 
         val femaleVoices = listOf(
             LiveVoiceOption("Sulafat", "Sulafat", "Warm & Sweet Female"),
@@ -121,16 +166,66 @@ class JuliLiveManager(
             return false
         }
 
-        internal fun formatLiveErrorMessage(e: Throwable): String {
+        internal fun formatLiveErrorMessage(
+            e: Throwable,
+            diagnostics: LiveServerCloseDiagnostics? = null
+        ): String {
             val raw = e.localizedMessage ?: e.message ?: "Failed to connect to Gemini Live."
-            if (raw.contains("App Check", ignoreCase = true) || raw.contains("403")) {
-                val diag = AppCheckDiagnostics.status.value
-                return "$raw [${diag.providerName}: ${diag.diagnosticMessage}]"
+            val appCheckDiag = AppCheckDiagnostics.status.value
+            val diagSummary = diagnostics?.compactSummary().orEmpty()
+            val combinedDiag = "${diagnostics?.combinedSearchText().orEmpty()} $raw"
+
+            if (raw.contains("App Check", ignoreCase = true) ||
+                combinedDiag.contains("app check", ignoreCase = true) ||
+                combinedDiag.contains("appcheck", ignoreCase = true) ||
+                combinedDiag.contains("attestation", ignoreCase = true) ||
+                (diagnostics?.appCheckIssue != null &&
+                    (diagnostics.httpCode == 403 || diagnostics.closeCode == 1008 || diagnostics.closeCode == null))
+            ) {
+                val reasonDetail = diagSummary.ifBlank { "${appCheckDiag.providerName}: ${appCheckDiag.diagnosticMessage}" }
+                return "Gemini Live App Check त्रुटि के कारण बंद हुआ ($reasonDetail)। Settings -> App Check में Refresh Token करें, या Quick Mic का उपयोग करें।"
             }
+
+            if (raw.contains("403") ||
+                diagnostics?.httpCode == 403 ||
+                combinedDiag.contains("API_KEY", ignoreCase = true) ||
+                combinedDiag.contains("PERMISSION_DENIED", ignoreCase = true) ||
+                combinedDiag.contains("not authorized", ignoreCase = true) ||
+                combinedDiag.contains("blocked", ignoreCase = true)
+            ) {
+                val reasonDetail = diagSummary.ifBlank { "${appCheckDiag.providerName}: ${appCheckDiag.diagnosticMessage}" }
+                return "Gemini Live सर्वर अनुमति त्रुटि ($reasonDetail)। कृपया API Key / Firebase AI Logic और App Check सेटअप जाँचें, या Quick Mic का उपयोग करें।"
+            }
+
+            if (diagnostics?.httpCode == 429 ||
+                combinedDiag.contains("quota", ignoreCase = true) ||
+                combinedDiag.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+                combinedDiag.contains("rate limit", ignoreCase = true) ||
+                combinedDiag.contains("billing", ignoreCase = true)
+            ) {
+                val reasonDetail = diagSummary.ifBlank { "Quota / Billing limit" }
+                return "Gemini Live की कोटा/बिलिंग सीमा पूरी हो गई है ($reasonDetail)। कुछ देर बाद प्रयास करें या Quick Mic का उपयोग करें।"
+            }
+
+            if (combinedDiag.contains("UnknownHostException", ignoreCase = true) ||
+                combinedDiag.contains("Unable to resolve host", ignoreCase = true) ||
+                combinedDiag.contains("SSLHandshakeException", ignoreCase = true) ||
+                combinedDiag.contains("ConnectException", ignoreCase = true) ||
+                combinedDiag.contains("SocketTimeoutException", ignoreCase = true)
+            ) {
+                val reasonDetail = diagSummary.ifBlank { raw.take(120) }
+                return "इंटरनेट / DNS कनेक्शन में समस्या ($reasonDetail)। नेटवर्क जाँचकर दोबारा Live दबाएँ, या Quick Mic का उपयोग करें।"
+            }
+
             if (isChannelClosedThrowable(e)) {
-                return "Gemini Live सर्वर कनेक्शन बंद हो गया (Channel closed)। कृपया इंटरनेट जाँचकर दोबारा Live दबाएँ, या Quick Mic का उपयोग करें।"
+                val detailSuffix = when {
+                    diagSummary.isNotBlank() -> " [$diagSummary]"
+                    !appCheckDiag.tokenReady -> " [${appCheckDiag.providerName}: ${appCheckDiag.diagnosticMessage}]"
+                    else -> ""
+                }
+                return "Gemini Live सर्वर कनेक्शन बंद हो गया (Channel closed)$detailSuffix। कृपया इंटरनेट जाँचकर दोबारा Live दबाएँ, या Quick Mic का उपयोग करें।"
             }
-            return raw
+            return if (diagSummary.isNotBlank()) "$raw [$diagSummary]" else raw
         }
     }
 
@@ -173,7 +268,11 @@ class JuliLiveManager(
                 }
             },
             tools = if (attempt.includeTools) listOf(JuliTools.tool) else emptyList(),
-            systemInstruction = JuliTools.buildSystemInstruction(languageCode)
+            systemInstruction = if (attempt.includeSystemInstruction) {
+                JuliTools.buildSystemInstruction(languageCode)
+            } else {
+                null
+            }
         )
     }
 
@@ -216,15 +315,55 @@ class JuliLiveManager(
                 }
 
                 cleanupSession()
+                val appCheckPreflightIssue = awaitAppCheckTokenIfNeeded()
 
                 val attempts = listOf(
-                    LiveAttemptConfig(PRIMARY_LIVE_MODEL, includeTools = true, includeTranscription = true, includeSpeechConfig = true),
-                    LiveAttemptConfig(SECONDARY_LIVE_MODEL, includeTools = true, includeTranscription = true, includeSpeechConfig = true),
-                    LiveAttemptConfig(PRIMARY_LIVE_MODEL, includeTools = true, includeTranscription = false, includeSpeechConfig = true),
-                    LiveAttemptConfig(PRIMARY_LIVE_MODEL, includeTools = false, includeTranscription = false, includeSpeechConfig = false)
+                    LiveAttemptConfig(
+                        PRIMARY_LIVE_MODEL,
+                        includeTools = true,
+                        includeTranscription = true,
+                        includeSpeechConfig = true,
+                        includeSystemInstruction = true
+                    ),
+                    LiveAttemptConfig(
+                        SECONDARY_LIVE_MODEL,
+                        includeTools = true,
+                        includeTranscription = true,
+                        includeSpeechConfig = true,
+                        includeSystemInstruction = true
+                    ),
+                    LiveAttemptConfig(
+                        TERTIARY_LIVE_MODEL,
+                        includeTools = true,
+                        includeTranscription = true,
+                        includeSpeechConfig = true,
+                        includeSystemInstruction = true
+                    ),
+                    LiveAttemptConfig(
+                        PRIMARY_LIVE_MODEL,
+                        includeTools = true,
+                        includeTranscription = false,
+                        includeSpeechConfig = true,
+                        includeSystemInstruction = false
+                    ),
+                    LiveAttemptConfig(
+                        PRIMARY_LIVE_MODEL,
+                        includeTools = false,
+                        includeTranscription = false,
+                        includeSpeechConfig = false,
+                        includeSystemInstruction = false
+                    ),
+                    LiveAttemptConfig(
+                        SECONDARY_LIVE_MODEL,
+                        includeTools = false,
+                        includeTranscription = false,
+                        includeSpeechConfig = false,
+                        includeSystemInstruction = false
+                    )
                 )
 
                 var lastError: Throwable? = null
+                var capturedCloseDiag: LiveServerCloseDiagnostics? = null
                 var connected = false
                 var connectedAttempt: LiveAttemptConfig? = null
 
@@ -240,11 +379,14 @@ class JuliLiveManager(
                         connectedAttempt = attempt
                         Log.i(
                             TAG,
-                            "Gemini Live started with model=${attempt.modelName}, tools=${attempt.includeTools}, voice=${_state.value.selectedVoice}"
+                            "Gemini Live started with model=${attempt.modelName}, tools=${attempt.includeTools}, sysInst=${attempt.includeSystemInstruction}, voice=${_state.value.selectedVoice}"
                         )
                         break
                     } catch (e: CancellationException) {
                         if (isStoppingManually || isChannelClosedThrowable(e)) {
+                            if (!isStoppingManually && capturedCloseDiag == null) {
+                                capturedCloseDiag = extractSessionCloseDiagnostics(liveSession)
+                            }
                             cleanupSession()
                             if (isStoppingManually) break
                             lastError = e
@@ -254,9 +396,12 @@ class JuliLiveManager(
                     } catch (t: Throwable) {
                         Log.w(
                             TAG,
-                            "Live attempt ${index + 1} (${attempt.modelName}, tools=${attempt.includeTools}) failed: ${t.message}",
+                            "Live attempt ${index + 1} (${attempt.modelName}, tools=${attempt.includeTools}, sysInst=${attempt.includeSystemInstruction}) failed: ${t.message}",
                             t
                         )
+                        if (!isStoppingManually && capturedCloseDiag == null) {
+                            capturedCloseDiag = extractSessionCloseDiagnostics(liveSession)
+                        }
                         cleanupSession()
                         lastError = t
                         val msg = t.message.orEmpty()
@@ -269,7 +414,7 @@ class JuliLiveManager(
                         if (!retryable) {
                             throw (t as? Exception ?: IllegalStateException(t.message, t))
                         }
-                        delay(350)
+                        delay(250)
                     }
                 }
 
@@ -286,7 +431,18 @@ class JuliLiveManager(
 
                 if (!connected) {
                     val finalErr = lastError ?: IllegalStateException("Failed to connect to Gemini Live.")
-                    throw (finalErr as? Exception ?: IllegalStateException(finalErr.message, finalErr))
+                    val closeDiag = if (isChannelClosedThrowable(finalErr)) {
+                        capturedCloseDiag ?: probeBidiWebSocketFailure(appCheckPreflightIssue)
+                    } else {
+                        capturedCloseDiag
+                    }
+                    val friendly = formatLiveErrorMessage(finalErr, closeDiag)
+                    Log.e(TAG, "All Gemini Live attempts failed. diag=${closeDiag?.compactSummary()}", finalErr)
+                    _state.value = _state.value.copy(
+                        phase = LivePhase.ERROR,
+                        errorMessage = friendly
+                    )
+                    return
                 }
 
                 val badgeHint = if (connectedAttempt != null && !connectedAttempt.includeTools) {
@@ -319,6 +475,7 @@ class JuliLiveManager(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start Gemini Live session", e)
+                val closeDiag = extractSessionCloseDiagnostics(liveSession)
                 cleanupSession()
                 if (isStoppingManually) {
                     _state.value = _state.value.copy(
@@ -327,7 +484,7 @@ class JuliLiveManager(
                     )
                     return
                 }
-                val friendly = formatLiveError(e)
+                val friendly = formatLiveErrorMessage(e, closeDiag)
                 _state.value = _state.value.copy(
                     phase = LivePhase.ERROR,
                     errorMessage = friendly
@@ -439,6 +596,8 @@ class JuliLiveManager(
             flushModelJob?.cancel()
             flushUserBuffer()
             flushModelBuffer()
+            val closeDiag = extractSessionCloseDiagnostics(session)
+                ?: if (isChannelClosedThrowable(throwable)) probeBidiWebSocketFailure(null) else null
             cleanupSession()
             if (isStoppingManually) {
                 _state.value = _state.value.copy(
@@ -452,7 +611,7 @@ class JuliLiveManager(
                     phase = LivePhase.ERROR,
                     userCaption = "",
                     modelCaption = "",
-                    errorMessage = formatLiveError(throwable)
+                    errorMessage = formatLiveErrorMessage(throwable, closeDiag)
                 )
             }
         }
@@ -630,6 +789,273 @@ class JuliLiveManager(
             sessionScope?.cancel()
         } catch (e: Throwable) {
             Log.w(TAG, "Ignoring error cancelling session scope: ${e.message}")
+        }
+    }
+
+    private suspend fun awaitAppCheckTokenIfNeeded(): String? {
+        if (AppCheckDiagnostics.status.value.tokenReady) return null
+        val (_, issue) = fetchAppCheckTokenAndIssue(timeoutMs = 2_200L)
+        return issue
+    }
+
+    private suspend fun fetchAppCheckTokenAndIssue(timeoutMs: Long): Pair<String, String?> {
+        val currentDiag = AppCheckDiagnostics.status.value
+        val result = withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<Pair<String, String?>> { cont ->
+                try {
+                    FirebaseAppCheck.getInstance().getAppCheckToken(false)
+                        .addOnCompleteListener { task ->
+                            if (!cont.isActive) return@addOnCompleteListener
+                            if (task.isSuccessful) {
+                                val token = task.result?.token.orEmpty()
+                                val isPlaceholder = token.isBlank() || token.startsWith("eyJlcnJvciI")
+                                if (isPlaceholder) {
+                                    val msg = "App Check placeholder/error token (${currentDiag.providerName})"
+                                    AppCheckDiagnostics.update(
+                                        currentDiag.copy(tokenReady = false, diagnosticMessage = msg)
+                                    )
+                                    cont.resume(token to msg)
+                                } else {
+                                    AppCheckDiagnostics.update(
+                                        currentDiag.copy(
+                                            tokenReady = true,
+                                            diagnosticMessage = "Valid token active (${currentDiag.providerName})"
+                                        )
+                                    )
+                                    cont.resume(token to null)
+                                }
+                            } else {
+                                val err = task.exception?.localizedMessage ?: "App Check token request failed"
+                                AppCheckDiagnostics.update(
+                                    currentDiag.copy(tokenReady = false, diagnosticMessage = err)
+                                )
+                                cont.resume("" to err)
+                            }
+                        }
+                } catch (t: Throwable) {
+                    if (cont.isActive) {
+                        cont.resume("" to (t.localizedMessage ?: "App Check unavailable"))
+                    }
+                }
+            }
+        }
+        return result ?: ("" to currentDiag.diagnosticMessage.takeIf { !currentDiag.tokenReady })
+    }
+
+    private suspend fun extractSessionCloseDiagnostics(session: LiveSession?): LiveServerCloseDiagnostics? {
+        if (session == null) return null
+        return try {
+            val sessionField = session.javaClass.getDeclaredField("session").apply {
+                isAccessible = true
+            }
+            val ktorSession = sessionField.get(session) ?: return null
+            val closeReasonMethod = ktorSession.javaClass.methods.firstOrNull {
+                it.name == "getCloseReason" && it.parameterCount == 0
+            } ?: return null
+            val deferred = closeReasonMethod.invoke(ktorSession) as? kotlinx.coroutines.Deferred<*> ?: return null
+            val closeReasonObj = withTimeoutOrNull(250L) { deferred.await() } ?: return null
+            val codeMethod = closeReasonObj.javaClass.methods.firstOrNull {
+                it.name == "getCode" && it.parameterCount == 0
+            }
+            val messageMethod = closeReasonObj.javaClass.methods.firstOrNull {
+                it.name == "getMessage" && it.parameterCount == 0
+            }
+            val code = (codeMethod?.invoke(closeReasonObj) as? Number)?.toInt()
+            val message = (messageMethod?.invoke(closeReasonObj) as? String)?.trim()
+            if (code == null && message.isNullOrBlank()) {
+                null
+            } else {
+                LiveServerCloseDiagnostics(closeCode = code, closeReason = message)
+            }
+        } catch (t: Throwable) {
+            Log.d(TAG, "Could not inspect Ktor closeReason reflectively: ${t.message}")
+            null
+        }
+    }
+
+    private suspend fun probeBidiWebSocketFailure(preflightAppCheckIssue: String?): LiveServerCloseDiagnostics? {
+        val options = try {
+            FirebaseApp.getInstance().options
+        } catch (t: Throwable) {
+            return LiveServerCloseDiagnostics(
+                appCheckIssue = preflightAppCheckIssue,
+                networkError = "FirebaseApp unavailable: ${t.message}"
+            )
+        }
+        val apiKey = options.apiKey.orEmpty()
+        if (apiKey.isBlank()) {
+            return LiveServerCloseDiagnostics(
+                appCheckIssue = preflightAppCheckIssue,
+                networkError = "Missing Firebase API key in google-services.json"
+            )
+        }
+
+        val (appCheckToken, tokenIssue) = fetchAppCheckTokenAndIssue(timeoutMs = 1_500L)
+        val combinedAppCheckIssue = tokenIssue ?: preflightAppCheckIssue
+        val certSha1 = getSigningCertSha1Hex()
+        val projectId = options.projectId
+        val wsUrl =
+            "wss://firebasevertexai.googleapis.com/ws/google.firebase.vertexai.v1beta.GenerativeService/BidiGenerateContent?key=$apiKey"
+
+        val client = OkHttpClient.Builder()
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .writeTimeout(3, TimeUnit.SECONDS)
+            .build()
+
+        var webSocket: WebSocket? = null
+        return try {
+            withTimeoutOrNull(3_600L) {
+                suspendCancellableCoroutine { cont ->
+                    var capturedServerMsg: String? = null
+                    val requestBuilder = Request.Builder()
+                        .url(wsUrl)
+                        .header("X-Android-Package", context.packageName)
+                        .header("X-Firebase-AppId", options.applicationId)
+                    if (!certSha1.isNullOrBlank()) {
+                        requestBuilder.header("X-Android-Cert", certSha1)
+                    }
+                    if (appCheckToken.isNotBlank()) {
+                        requestBuilder.header("X-Firebase-AppCheck", appCheckToken)
+                    }
+
+                    webSocket = client.newWebSocket(requestBuilder.build(), object : WebSocketListener() {
+                        override fun onOpen(ws: WebSocket, response: Response) {
+                            val modelPath = if (!projectId.isNullOrBlank()) {
+                                "projects/$projectId/models/$PRIMARY_LIVE_MODEL"
+                            } else {
+                                "models/$PRIMARY_LIVE_MODEL"
+                            }
+                            val setupJson = JSONObject().apply {
+                                put("setup", JSONObject().apply {
+                                    put("model", modelPath)
+                                    put("generationConfig", JSONObject().apply {
+                                        put("responseModalities", JSONArray().put("AUDIO"))
+                                    })
+                                })
+                            }.toString()
+                            ws.send(setupJson)
+                        }
+
+                        override fun onMessage(ws: WebSocket, text: String) {
+                            capturedServerMsg = parseBidiServerSnippet(text)
+                            if (text.contains("\"error\"", ignoreCase = true) ||
+                                text.contains("\"setupComplete\"", ignoreCase = true)
+                            ) {
+                                ws.close(1000, "diagnostic_done")
+                                if (cont.isActive) {
+                                    cont.resume(
+                                        LiveServerCloseDiagnostics(
+                                            serverMessage = capturedServerMsg,
+                                            appCheckIssue = combinedAppCheckIssue
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                            if (cont.isActive) {
+                                cont.resume(
+                                    LiveServerCloseDiagnostics(
+                                        closeCode = code,
+                                        closeReason = reason.trim().takeIf { it.isNotEmpty() },
+                                        serverMessage = capturedServerMsg,
+                                        appCheckIssue = combinedAppCheckIssue
+                                    )
+                                )
+                            }
+                        }
+
+                        override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                            if (cont.isActive) {
+                                cont.resume(
+                                    LiveServerCloseDiagnostics(
+                                        closeCode = code,
+                                        closeReason = reason.trim().takeIf { it.isNotEmpty() },
+                                        serverMessage = capturedServerMsg,
+                                        appCheckIssue = combinedAppCheckIssue
+                                    )
+                                )
+                            }
+                        }
+
+                        override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                            val httpCode = response?.code
+                            val bodySnippet = try {
+                                response?.body?.string()?.let { parseBidiServerSnippet(it) }
+                            } catch (_: Throwable) {
+                                null
+                            }
+                            if (cont.isActive) {
+                                cont.resume(
+                                    LiveServerCloseDiagnostics(
+                                        httpCode = httpCode,
+                                        serverMessage = bodySnippet ?: capturedServerMsg,
+                                        appCheckIssue = combinedAppCheckIssue,
+                                        networkError = "${t.javaClass.simpleName}: ${t.message}"
+                                    )
+                                )
+                            }
+                        }
+                    })
+                }
+            } ?: LiveServerCloseDiagnostics(
+                appCheckIssue = combinedAppCheckIssue,
+                networkError = "Diagnostic probe timed out"
+            )
+        } catch (t: Throwable) {
+            Log.d(TAG, "Bidi WebSocket probe error: ${t.message}")
+            LiveServerCloseDiagnostics(
+                appCheckIssue = combinedAppCheckIssue,
+                networkError = t.message
+            )
+        } finally {
+            try {
+                webSocket?.cancel()
+            } catch (_: Throwable) {}
+            try {
+                client.connectionPool.evictAll()
+                client.dispatcher.executorService.shutdown()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun parseBidiServerSnippet(text: String): String {
+        val trimmed = text.trim()
+        if (trimmed.contains("\"setupComplete\"")) {
+            return "Minimal Live setup accepted; full config rejected"
+        }
+        return try {
+            val json = JSONObject(trimmed)
+            val errObj = json.optJSONObject("error")
+            if (errObj != null) {
+                val status = errObj.optString("status")
+                val msg = errObj.optString("message")
+                listOf(status, msg).filter { it.isNotBlank() }.joinToString(": ").ifBlank { trimmed.take(180) }
+            } else {
+                trimmed.take(180)
+            }
+        } catch (_: Throwable) {
+            trimmed.take(180)
+        }
+    }
+
+    private fun getSigningCertSha1Hex(): String? {
+        return try {
+            val pm = context.packageManager
+            val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val info = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+                info.signingInfo?.apkContentsSigners
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures
+            }
+            val certBytes = signatures?.firstOrNull()?.toByteArray() ?: return null
+            val digest = MessageDigest.getInstance("SHA-1").digest(certBytes)
+            digest.joinToString("") { "%02X".format(it) }
+        } catch (_: Throwable) {
+            null
         }
     }
 
